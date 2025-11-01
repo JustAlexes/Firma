@@ -1,17 +1,29 @@
 import math
 import requests
 import pandas as pd
+import time
 
-seller = '53699'
-page = 1
-catalog_url = f'https://catalog.wb.ru/sellers/v4/catalog?ab_testing=false&ab_testing=false&appType=1&curr=rub&dest=123587633&hide_dtype=11&lang=ru&page={str(page)}&sort=popular&spp=30&supplier={seller}&uclusters=1'
-quantity_products = 1
 
-items = []
-personal_discount = 6
 
-response = requests.get(catalog_url)
-print(response.json())
+
+def parse_seller_page(seller_id: str | int, personal_discount: int):
+    page = 1
+
+    items = []
+    quantity_products = 1
+
+    while quantity_products != 0:
+        url = f'https://catalog.wb.ru/sellers/v4/catalog?ab_testing=false&ab_testing=false&appType=1&curr=rub&dest=123587633&hide_dtype=11&lang=ru&page={str(page)}&sort=popular&spp=30&supplier={str(seller_id)}&uclusters=1'
+        response = requests.get(url)
+        print(response.status_code)
+        data = response.json()
+        products = data.get('products', [])
+        quantity_products = (len(products))
+        print(quantity_products)
+        page = page + 1
+        time.sleep(5)
+
+parse_seller_page(seller_id=53699, personal_discount=6)
 
 # while quantity_products != 0:
 #     response = requests.get(catalog_url)
