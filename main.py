@@ -5,10 +5,9 @@ import time
 import os
 from dotenv import load_dotenv
 import asyncio
-import requests
 
 from fake_useragent import UserAgent
-
+ 
 
 async def seller_prices(session: aiohttp.ClientSession, seller_id: str | int, personal_discount: int) -> list:
     """ Получаем товары со страницы продавца с ценами на сайте """
@@ -110,15 +109,17 @@ async def get_nomenclature(session: aiohttp.ClientSession, TOKEN: str) -> list:
             
                     updatedAt = data.get('cursor', {}).get('updatedAt', None)
                     nmID = data.get('cursor', {}).get('nmID', None)
-                    total = data.get('cursor', {}).get('total', 0)
+                    total = data.get('cursor', {}).get('total', None)
                     print(f'Total: {total}, Found {len(items)} products')
 
                     for item in items:
                         card = {}
-                        card['WB_ID'] = item.get('nmID', 0)
-                        card['name'] = item.get('title', None)
+                        card['brand'] = item.get('brand', None)
+                        card['category'] = item.get('subjectName', None)
+                        card['WB_ID'] = item.get('nmID', None)
                         card['article'] = item.get('vendorCode', None)
-                        card['skus'] = [] # Баркоды
+                        card['name'] = item.get('title', None)
+                        card['skus'] = []
                         for size in item.get('sizes', []):
                             for sku in size.get('skus', []):
                                 card['skus'].append(sku)
@@ -171,9 +172,9 @@ async def get_prices(session: aiohttp.ClientSession, TOKEN: str) -> list:
 
                 for item in items:
                     card = {}
-                    card['WB_ID'] = item.get('nmID', 0)
-                    card['price'] = item.get('sizes', [])[0].get('price', 0)
-                    card['discount'] = item.get('discount', 0)
+                    card['WB_ID'] = item.get('nmID', None)
+                    card['price'] = item.get('sizes', [])[0].get('price', None)
+                    card['discount'] = item.get('discount', None)
                     card['discountedPrice'] = int(round(card['price'] * (1 - card['discount']/100), 0))
                     card['clubDiscount'] = item.get('clubDiscount', 0)
                     card['clubDiscountedPrice'] = round(card['discountedPrice'] * (1 - card['clubDiscount']/100), 1)
@@ -227,7 +228,7 @@ async def main():
     report['profit'] = round(report['clubDiscountedPrice'] - report['cost_price'], 2)
     report['markup, %'] = (round((report['clubDiscountedPrice']/report['cost_price']) * 100)).astype('Int64')
 
-    report = report[['WB_ID', 'name', 'article', 'skus', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'spp', 'wb_price', 'personal_discount', 'personal_price', 'cost_price', 'profit', 'markup, %']]
+    report = report[['brand', 'category', 'WB_ID', 'name', 'article', 'skus', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'spp', 'wb_price', 'personal_discount', 'personal_price', 'cost_price', 'profit', 'markup, %']]
 
     try:
         pd.DataFrame(report).to_csv('Метрики.csv', index=False)
