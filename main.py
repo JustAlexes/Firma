@@ -1,7 +1,9 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from dateutil.relativedelta import relativedelta
 import math
 import aiohttp
 import pandas as pd
-import time
 import os
 from dotenv import load_dotenv
 import asyncio
@@ -161,8 +163,6 @@ async def get_prices(session: aiohttp.ClientSession, TOKEN: str) -> list:
         async with session.get(url=url, headers=headers, params=params) as response:
             print(f'Запрос: {url}')
 
-            data = await response.json()
-
             if response.status == 200:
                 data = await response.json()
                 items = data.get('data', {}).get('listGoods', [])
@@ -196,46 +196,144 @@ async def get_prices(session: aiohttp.ClientSession, TOKEN: str) -> list:
     return cards 
         
 
+async def get_orders(session: aiohttp.ClientSession, TOKEN: str) -> list:
+    """ Получаем поставки по API """
+    load_dotenv()
+    TOKEN = os.getenv(TOKEN)
+    
+    url = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders'
+    headers = {'Authorization': TOKEN}
+    dateFrom = (datetime.now(ZoneInfo('Europe/Moscow')).date()-relativedelta(months=1)).isoformat()
+    params = {'dateFrom': dateFrom}
+    
+    orders = []
+
+    try:
+        async with session.get(url=url, headers=headers, params=params) as response:
+            print(f'Запрос: {url}')
+
+            if response.status == 200:
+                data = await response.json()
+                
+                for item in data:
+                    if item.get('isCancel', False) is False:
+                        order = {}
+                        order['region'] = item.get('oblastOkrugName')
+                        order['article'] = item.get('supplierArticle')
+                        order['WB_ID'] = item.get('nmId')
+                        order['category'] = item.get('subject')
+                        order['brand'] = item.get('brand')
+                        order['article'] = item.get('supplierArticle')
+                        
+                        orders.append(order)
+
+                return orders
+        
+            elif response.status == 429:
+                print("Too many requests. Waiting 10 seconds...")
+                    
+            else:
+                print(f"Error {response.status}. Retrying in 5 seconds...")
+
+    except aiohttp.ClientError as e:
+        print(f'Error {e}. Retrying in 5 seconds...')
+        await asyncio.sleep(5)
+
+
+
+async def get_supplies(session: aiohttp.ClientSession, TOKEN: str) -> list:
+    """ Получаем поставки по API """
+    load_dotenv()
+    TOKEN = os.getenv(TOKEN)
+    
+    url = 'https://supplies-api.wildberries.ru/api/v1/supplies'
+    headers = {'Authorization': TOKEN}
+    dates = [{'type': 'supplyDate'}]
+    statusIDs = [3]
+    params = {
+        "dates": [
+            {
+            "from": "2025-01-01",
+            "till": "2025-12-05",
+            "type": "supplyDate"
+            }
+        ],
+        "statusIDs": [3]
+        }
+    
+    supplies = []
+
+    try:
+        async with session.post(url=url, headers=headers) as response:
+            print(f'Запрос: {url}')
+
+            if response.status == 200:
+                data = await response.json()
+                
+                for item in data:
+                    supply = {}
+                    supply['supplyID'] = item.get('supplyID')
+                    
+                    supplies.append(supply)
+
+                return supplies
+        
+            elif response.status == 429:
+                print("Too many requests. Waiting 10 seconds...")
+                    
+            else:
+                print(f"Error {response.status}. Retrying in 5 seconds...")
+
+    except aiohttp.ClientError as e:
+        print(f'Error {e}. Retrying in 5 seconds...')
+        await asyncio.sleep(5)    
+
+    
+    
     
 
 async def main():
     async with aiohttp.ClientSession() as session:
         result = await asyncio.gather(
-            get_nomenclature(session=session, TOKEN='КОСТРИК'),
-            seller_prices(session=session, seller_id=53699, personal_discount=7),
-            get_prices(session=session, TOKEN='КОСТРИК')
-            )
+            get_supplies(session=session, TOKEN='КОСТРИК')
+        )
+        print(len(result[0]))
+    #     result = await asyncio.gather(
+    #         get_nomenclature(session=session, TOKEN='КОСТРИК'),
+    #         seller_prices(session=session, seller_id=53699, personal_discount=7),
+    #         get_prices(session=session, TOKEN='КОСТРИК')
+    #         )
 
-    nomenclature_df = pd.DataFrame(result[0])
-    wb_prices_df = pd.DataFrame(result[1])
-    api_prices_df = pd.DataFrame(result[2])
-    cost_price_1C = (pd.read_excel('Прайс-лист.xls')).rename(columns={'Код': 'article', 'Наименование': 'name', 'Закуп.': 'cost_price'})
-    cost_price_1C['cost_price'] = cost_price_1C['cost_price'].str.replace('\'', '').astype('Float64')
+    # nomenclature_df = pd.DataFrame(result[0])
+    # wb_prices_df = pd.DataFrame(result[1])
+    # api_prices_df = pd.DataFrame(result[2])
+    # cost_price_1C = (pd.read_excel('Прайс-лист.xls')).rename(columns={'Код': 'article', 'Наименование': 'name', 'Закуп.': 'cost_price'})
+    # cost_price_1C['cost_price'] = cost_price_1C['cost_price'].str.replace('\'', '').astype('Float64')
     
-    report = pd.merge(
-        left=nomenclature_df, 
-        right=wb_prices_df[['WB_ID', 'wb_price', 'personal_discount', 'personal_price']], 
-        how='left', 
-        on='WB_ID').merge(
-            right=api_prices_df, 
-            how='left', 
-            on='WB_ID').merge(
-                right=cost_price_1C[['article', 'cost_price']],
-                how='left',
-                on='article')
+    # report = pd.merge(
+    #     left=nomenclature_df, 
+    #     right=wb_prices_df[['WB_ID', 'wb_price', 'personal_discount', 'personal_price']], 
+    #     how='left', 
+    #     on='WB_ID').merge(
+    #         right=api_prices_df, 
+    #         how='left', 
+    #         on='WB_ID').merge(
+    #             right=cost_price_1C[['article', 'cost_price']],
+    #             how='left',
+    #             on='article')
     
-    report['spp'] = (round((1 - report['wb_price']/report['clubDiscountedPrice']) * 100, 0)).astype('Int64')
-    report['profit'] = round(report['clubDiscountedPrice'] - report['cost_price'], 2)
-    report['markup, %'] = (round((report['clubDiscountedPrice']/report['cost_price']) * 100)).astype('Int64')
+    # report['spp'] = (round((1 - report['wb_price']/report['clubDiscountedPrice']) * 100, 0)).astype('Int64')
+    # report['profit'] = round(report['clubDiscountedPrice'] - report['cost_price'], 2)
+    # report['markup, %'] = (round((report['clubDiscountedPrice']/report['cost_price']) * 100)).astype('Int64')
 
-    report = report[['brand', 'category', 'WB_ID', 'name', 'article', 'skus', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'spp', 'wb_price', 'personal_discount', 'personal_price', 'cost_price', 'profit', 'markup, %']]
+    # report = report[['brand', 'category', 'WB_ID', 'name', 'article', 'skus', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'spp', 'wb_price', 'personal_discount', 'personal_price', 'cost_price', 'profit', 'markup, %']]
 
-    try:
-        pd.DataFrame(report).to_csv('Метрики.csv', index=False)
-        pd.DataFrame(report).to_excel('Метрики.xlsx', index=False)
+    # try:
+    #     pd.DataFrame(report).to_csv('Метрики.csv', index=False)
+    #     pd.DataFrame(report).to_excel('Метрики.xlsx', index=False)
         
-    except Exception as e:
-        print(f'\n\nОшибка сохранения: {e}!\n\n')
+    # except Exception as e:
+    #     print(f'\n\nОшибка сохранения: {e}!\n\n')
 
 
 if __name__ == '__main__':
