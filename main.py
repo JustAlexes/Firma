@@ -92,6 +92,7 @@ class APIRequests:
         self.session = session
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
+        
 
     async def get_nomenclature(self, max_attempts: int = 5) -> list:
         """ Получаем список номенклатуры по API """
@@ -134,6 +135,7 @@ class APIRequests:
                             nmID = data.get('cursor', {}).get('nmID')
                             total = data.get('cursor', {}).get('total')
                             self.logger.info(f'Fetched {len(items)} items, total remaining: {total}')
+                            if total == 0: break
                             
                             for item in items:
                                 card = {}
@@ -177,7 +179,6 @@ class APIRequests:
                 except Exception as e:
                     self.logger.error(f'Unexpected error during request: {e}')
                     break
-
         return cards
 
     async def get_prices(self) -> list:
@@ -272,13 +273,18 @@ class APIRequests:
     async def get_supplies(self) -> list:
         url = 'https://supplies-api.wildberries.ru/api/v1/supplies'
         headers = {'Authorization': self.TOKEN}
-        dates = [{'type': 'supplyDate'}]
+        dates = [{
+            'from': (datetime.now(ZoneInfo('Europe/Moscow')).date() - relativedelta(months=1)).isoformat(),
+            'type': 'supplyDate'
+            }]
         statusIDs = [3]
         params = {
             "dates": dates,
             "statusIDs": statusIDs
         }
 
+
+        # Получаем ID всех созданных поставок
         supplies_IDs = []
 
         try:
@@ -304,52 +310,115 @@ class APIRequests:
             print(f'Error {e}. Retrying in 5 seconds...')
             await asyncio.sleep(5)
 
+        # По полученным ID получаем подробную информацию о всех поставках
         supplies_details = []
+        supplies_goods = []
+        for supply_ID in supplies_IDs: 
+            
+            max_retries = 5
+            retry_delay = 5
+            for attempt in range(max_retries):
+                url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}'
+                
+                try:
+                    async with self.session.get(url=url, headers=headers) as response:
+                        print(f'Запрос: {url} (попытка {attempt + 1}/{max_retries})')
 
-        for supply_ID in supplies_IDs:
-            url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID['supplyID']}'
-            try:
-                async with self.session.get(url=url, headers=headers) as response:
-                    print(f'Запрос: {url}')
+                        if response.status == 200:
+                            supply_item = await response.json()
+                            supply = {
+                                    'supplyID': supply_ID["supplyID"],
+                                    'warehouse': supply_item.get('warehouseName'),
+                                }
 
-                    if response.status == 200:
-                        item = await response.json()
+                            supplies_details.append(supply)
+                            break
+                            
+                        elif response.status == 429:
+                            retry_delay = min(30, retry_delay * 2)
+                            print(f"Too many requests (429). Waiting {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            
+                        else:
+                            error_text = await response.text()
+                            print(f"Error {response.status}: {error_text}. Retrying in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            
+                except aiohttp.ClientError as e:
+                    retry_delay = min(30, retry_delay * 2)
+                    print(f'Network error {e}. Retrying in {retry_delay} seconds...')
+                    await asyncio.sleep(retry_delay)
+                    
+                except Exception as e:
+                    print(f'Unexpected error: {e}. Retrying in {retry_delay} seconds...')
+                    await asyncio.sleep(retry_delay)
+            
+            else:
+                print(f"❌ Все попытки исчерпаны для supplyID: {supply_ID['supplyID']}. Пропускаем этот запрос.")
+                continue
+            
+            # По полученным ID получаем содержание всех поставок
+            max_retries = 5
+            retry_delay = 5
+            for attempt in range(max_retries):
+                url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}/goods'
+                
+                try:
+                    async with self.session.get(url=url, headers=headers) as response:
+                        print(f'Запрос: {url} (попытка {attempt + 1}/{max_retries})')
 
-                        supply = {}
-                        supply['createDate'] = item.get('createDate')
-                        supply['supplyID'] = supply_ID
-                        supply['warehouseID'] = item.get('warehouseID')
-                        supply['warehouseName'] = item.get('warehouseName')
-                        supply['acceptanceCost'] = item.get('acceptanceCost')
-                        supply['storageCoef'] = item.get('storageCoef')
-                        supply['deliveryCoef'] = item.get('deliveryCoef')
-                        supply['quantity'] = item.get('quantity')
-                        supply['acceptedQuantity'] = item.get(
-                            'acceptedQuantity')
-                        supply['readyForSaleQuantity'] = item.get(
-                            'readyForSaleQuantity')
+                        if response.status == 200:
+                            supplies_goods_json = await response.json()
+                            for supply_item in supplies_goods_json:
+                                supply_product = {
+                                    'supplyID': supply_ID["supplyID"],
+                                    'barcode': supply_item.get('barcode'),
+                                    'article': supply_item.get('vendorCode'),
+                                    'nmID': supply_item.get('nmID'),
+                                    'quantity': supply_item.get('quantity')
+                                }
+                                supplies_goods.append(supply_product)
+                            break
+                            
+                        elif response.status == 429:
+                            retry_delay = min(30, retry_delay * 2)
+                            print(f"Too many requests (429). Waiting {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            
+                        else:
+                            error_text = await response.text()
+                            print(f"Error {response.status}: {error_text}. Retrying in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            
+                except aiohttp.ClientError as e:
+                    retry_delay = min(30, retry_delay * 2)
+                    print(f'Network error {e}. Retrying in {retry_delay} seconds...')
+                    await asyncio.sleep(retry_delay)
+                    
+                except Exception as e:
+                    print(f'Unexpected error: {e}. Retrying in {retry_delay} seconds...')
+                    await asyncio.sleep(retry_delay)
+            
+            else:
+                print(f"❌ Все попытки исчерпаны для supplyID: {supply_ID['supplyID']}. Пропускаем этот запрос.")
+                continue
 
-                        supplies_details.append(supply)
-
-                    elif response.status == 429:
-                        print("Too many requests. Waiting 10 seconds...")
-
-                    else:
-                        print(
-                            f"Error {response.status}. Retrying in 5 seconds...")
-
-            except aiohttp.ClientError as e:
-                print(f'Error {e}. Retrying in 5 seconds...')
-                await asyncio.sleep(5)
+        supplies = pd.merge(left=pd.DataFrame(supplies_goods), right=pd.DataFrame(supplies_details), on='supplyID')
+        supplies = pd.merge(left=supplies, right=pd.read_excel('Склады по регионам.xlsx', index_col=False), left_on='warehouse', right_on='Склад')
+        supplies = supplies.rename(columns={'Регион': 'region'})
+        supplies = supplies[['supplyID', 'barcode', 'article', 'nmID', 'quantity', 'warehouse', 'region']]
+        return supplies
+        
 
 
 async def main():
     async with aiohttp.ClientSession() as session:
         api_requests = APIRequests(session=session, TOKEN='КОСТРИК')
         result = await asyncio.gather(
-            api_requests.get_nomenclature()
+            api_requests.get_supplies()
         )
-        print(len(result[0]))
+        
+        result[0].to_excel('Поставки.xlsx', index=False)
     #     result = await asyncio.gather(
     #         get_nomenclature(session=session, TOKEN='КОСТРИК'),
     #         seller_prices(session=session, seller_id=53699, personal_discount=7),
