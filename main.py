@@ -1,210 +1,53 @@
-import os
-import asyncio
-import time
 from loguru import logger
+import time
+from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dateutil.relativedelta import relativedelta
-import math
-import aiohttp
+import os
 import pandas as pd
-from dotenv import load_dotenv
-import gspread
-from seleniumbase import Driver
 import requests
 from fake_useragent import UserAgent
+from seleniumbase import Driver
+
+from requests.exceptions import HTTPError, ConnectionError, Timeout, RequestException
 
 
-# UA = UserAgent()
-# USER_AGENT = UA.chrome
-# URL = 'https://www.wildberries.ru'
-# COOKIES_NEED = 'x_wbaas_token'
+USER_AGENT = UserAgent().chrome
+WB_URL = 'https://www.wildberries.ru'
+# OZON_URL = 'https://www.ozon.ru/'
+COOKIES_NEED = 'x_wbaas_token'
+
+DEFAULT_PAYMENT_URL = "https://static-basket-01.wbbasket.ru/vol1/global-payment/default-payment.json"
+SETTINGS_URL = "https://static-basket-01.wbbasket.ru/vol0/data/settings-front.json"
+
     
-# class WebDriverCookies:
-#     def __init__(self, user_agent: str = None, url: str = None, cookies_need: str = None):
-#         self.user_agent = user_agent or USER_AGENT
-#         self.url = url or URL
-#         self.cookies_need = cookies_need or COOKIES_NEED
-    
-#     def get_token(self) -> str:
-#         driver = Driver(
-#             uc=True,
-#             headed=True,
-#             agent=self.user_agent
-#         )
-        
-#         try:
-#             driver.open(self.url)
-#             for i in range(3):
-#                 driver.get_cookies
-                
-#         finally:
-#             driver.quit()
-        
-
-
-# x_wbaas_token = '1.1000.26736a9708a340bdbc4664025f5f98aa.MTV8ODAuOTMuMTg3Ljg5fE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNDQuMC4wLjAgU2FmYXJpLzUzNy4zNnwxNzcxMjQxMzE3fHJldXNhYmxlfDJ8ZXlKb1lYTm9Jam9pSW4wPXwwfDN8MTc3MDYzNjUxN3wx.MEUCIH7UsEWL3ErVenJ4LG2XkwiKG+4eJGTxeQHAQg2bQaZAAiEAsQBlu+3I5bwj9Y7wr1oBfHy5FA6bVa8F9jnhFyZk8vU='
-# URL = ''
-# PARAMS = {
-#         "ab_testing":"false",
-#         "appType":"1",
-#         "curr":"rub",
-#         "dest":"123587059",
-#         "hide_dtype":"9",
-#         "hide_vflags":"4294967296",
-#         "lang":"ru",
-#         "page":"1",
-#         "sort":"popular",
-#         "spp":"30",
-#         "supplier":"53699",
-#         "uclusters":"3"
-#     }
-# HEADERS = {
-#             }
-
-# driver.open('https://www.wildberries.ru')
-# time.sleep(10)
-# driver.quit()
-
-# response = requests.get(url=URL, headers=HEADERS, params=PARAMS)
-# print(HEADERS)
-# print(response)
-# print(response.status_code)
-
-# response = requests.get(
-#     url='https://www.wildberries.ru/__internal/catalog/sellers/v4/catalog',
-#     params={
-#         "ab_testing":"false",
-#         "appType":"1",
-#         "curr":"rub",
-#         "dest":"123587059",
-#         "hide_dtype":"9",
-#         "hide_vflags":"4294967296",
-#         "lang":"ru",
-#         "page":"1",
-#         "sort":"popular",
-#         "spp":"30",
-#         "supplier":"53699",
-#         "uclusters":"3"
-#     },
-#     headers={
-#         "accept":"*/*",
-#         "accept-language":"ru,en;q=0.9",
-#         "authorization":"Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzAwMDIyNzYsInVzZXIiOiI4NDM5Mzk1MSIsInNoYXJkX2tleSI6IjEzIiwiY2xpZW50X2lkIjoid2IiLCJzZXNzaW9uX2lkIjoiMDY4ZDEyZTBhMTQ2NDgzYWIzNTdkNDhlYTI4OWFlZTIiLCJwaG9uZSI6InllT2dPVlh3Q2R4VEZUTTVUTEUrd1E9PSIsInZhbGlkYXRpb25fa2V5IjoiMTgxYWZlYWE4ODk0YTA2NTExOGUzNmVjOWQ5OWY0ZTdlOGUxZjE2YTk4ZTM3YjQ0NDhmNTQ1N2Y0YTExOTFkYyIsInVzZXJfcmVnaXN0cmF0aW9uX2R0IjoxNjc0MTEwOTM5LCJ2ZXJzaW9uIjoyfQ.ib_g4_8bnpxgdvQi-yD-bvGNxxjC2McUPT5ksIh169710Hm2VuUx-jIEG8_U7yvD2nlnA_OuLtVCVDheB-z-4vHTyRqqH8txrUxtIpWps8h7ZHDToCXEQjbuyAjdUkuvKp-aHOvaoQO2SBqX1_guHBYKC93ewjekHYDXiY0pn3sJBxO-0uP2TH1ry6LwIGK4_Z156mYoyl9g45zNTWSKTIB76esRPOd3tC4A7okpZOF7EQeTT6s0eXSj3jVkcGuU2PdOco2ZgIm7fgu9aVxHVU_Jc-7EM5Z-qibudEXwqds0ag41G-v57SDqR_xx4j4xE1trsEjGH-kLGqLLdwehdA",
-#         "deviceid":"site_ead5724dd3aa4c0fb8f949aa11104dac",
-#         "priority":"u=1, i",
-#         "referer":"https://www.wildberries.ru/seller/53699",
-#         "sec-ch-ua":"\"Chromium\";v=\"142\", \"YaBrowser\";v=\"25.12\", \"Not_A Brand\";v=\"99\", \"Yowser\";v=\"2.5\"",
-#         "sec-ch-ua-mobile":"?1",
-#         "sec-ch-ua-platform":"\"Android\"",
-#         "sec-fetch-dest":"empty",
-#         "sec-fetch-mode":"cors",
-#         "sec-fetch-site":"same-origin",
-#         "user-agent":"Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36",
-#         "x-requested-with":"XMLHttpRequest",
-#         "x-spa-version":"13.21.4"
-#     },
-#     cookies={
-#         "_wbauid":"401878001768557149; _cp=1; external-locale=ru; _wbauid=8574176031768559539; wbx-validation-key=b61a6104-e1aa-4b51-b491-e4c46340b24d; feedbacks_link_accepted=1; x_wbaas_token=1.1000.cffbe45167d545faae560828521067ef.MHwxNzguNzQuNjguMTA2fE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNDIuMC4wLjAgWWFCcm93c2VyLzI1LjEyLjAuMCBTYWZhcmkvNTM3LjM2fDE3NzA5Nzc4NzR8cmV1c2FibGV8MnxleUpvWVhOb0lqb2lJbjA9fDB8M3wxNzcwMzczMDc0fDE=.MEUCIFNJ3iCdP6oNQ7C3MYfJ9THR7xiAtkTOHtu5SDS1xQ5pAiEA3+R3CI4wwjUxYpTIzjz/spZBw/kM6EYI2g82pfZYu7s=; routeb=1770002277.354.628.657647|4cbe85fb742f9006ed4b10eaae805e6b; x-supplier-id-external=064e1dc5-9e31-4107-a6d6-2f9abd3bbcec; __zzatw-wb=MDA0dC0cTHtmcDhhDHEWTT17CT4VHThHKHIzd2UxP2gmYlBeIDVRP0FaW1Q4NmdBEXUmCQg3LGBwVxlRExpceEdXeiwgEXdtK08JEWFAQmllbQwtUlFRS19/Dg4/aU5ZQ11wS3E6EmBWGB5CWgtMeFtLKRZHGzJhXkZpdRUNPA5kQUNvLC5EZ1BjSl8ndFZVeidPQ35vJ08PFBU/d19vG3siXyoIJGM1Xz9EaVhTMCpYQXt1J3Z+KmUzPGwkX0dbJ0NXU38oGg1pN2wXPHVlLwkxLGJ5MVIvE0tsP0caRFpbQDsyVghDQE1HFF9BWncyUlFRS2EQR0lrZU5TQixmG3EVTQgNND1aciIPWzklWAgSPwsmIBh3ayVXfw1hQ0Rvbxt/Nl0cOWMRCxl+OmNdRkc3FSR7dSYKCTU3YnAvTCB7SykWRxsyYV5GaXUVTw0PGD51KHgmRCIgYERdIENcSjIrTRd0bVlYOD0XQHMnLl5uVxlRDxZhDhYYRRcje0I3Yhk4QhgvPV8/YngiD2lIYCZDVU8JJRsYe20kS3FPLH12X30beylOIA0lVBMhP05yIuyW0A==; cfidsw-wb=5KPM0zh0WlXrSn6uUaLkStpHqcwiwjpLPOgabOVQM46wJkSPuQs+exiJ+I5N4MKWLNSa2LnAMlkVXOgFugjGBdES6y7MjbbLGKoSEvTYqU7f/iTvh+Q8RFbYQvB/OlYUe/Oq2z2rSGxABY85P9psNT2oK3DqsPa985c1KvbFbw=="
-#     },
-    
-# )
-
-# print(response.text)
-
-
-# class ParseRequests:
-#     """
-#     Docstring for ParseRequests
-#     """
-#     def __init__(self, session: aiohttp.ClientSession):
-#         self.session = session
-#         logger.info('Create parse class')
-
-#     async def fetch_prices(self) -> list:
-#         """Получаем товары со страницы с ценами на сайте"""
-
-
-#         while page <= total_pages:
-#             headers = {
-#                 'UserAgent': fua.random
-#             }
-#             url = f'https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog?ab_testing=false&ab_testing=false&appType=1&curr=rub&dest=-{dest}&hide_dtype=11&lang=ru&page={page}&sort=popular&spp=30&supplier={self.seller_id}'
-
-#             try:
-#                 async with self.session.get(url, headers=headers) as response:
-#                     print(f'Запрос: {url}')
-
-#                     if response.status == 200:
-#                         data = await response.json()
-#                         products = data.get('products', [])
-
-#                         total_pages = math.ceil(data.get('total', 1) / 100)
-
-#                         print(
-#                             f"POST_CODE {response.status} \n"
-#                             f"Seller {self.seller_id}, page {page}: \n"
-#                             f"Found {len(products)} products, total pages: {total_pages} \n"
-#                         )
-
-#                         for product in products:
-#                             wb_price = product.get('sizes', [{}])[0].get(
-#                                 'price', {}).get('product', 0) / 100
-#                             personal_price = wb_price * \
-#                                 (1 - self.personal_discount/100)
-
-#                             item = {
-#                                 'WB_ID': product.get('id'),
-#                                 'wb_price': wb_price,
-#                                 'personal_discount': self.personal_discount,
-#                                 'personal_price': math.floor(personal_price)
-#                             }
-
-#                             items.append(item)
-#                         page = page + 1
-
-#                     elif response.status == 429:
-#                         print("Too many requests. Waiting 10 seconds...")
-#                         await asyncio.sleep(10)
-
-#                     else:
-#                         print(
-#                             f"Error {response.status}. Retrying in 5 seconds...")
-#                         await asyncio.sleep(5)
-
-#             except aiohttp.ClientError as e:
-#                 print(f'Error {e}. Retrying in 5 seconds...')
-#                 await asyncio.sleep(5)
-
-#         return items
-
-
 class APIRequests:
-    def __init__(self, session: aiohttp.ClientSession, TOKEN_KEY: str):
+
+    def __init__(self, TOKEN_KEY: str):
         load_dotenv()
         self.TOKEN_KEY = TOKEN_KEY
         self.TOKEN = os.getenv(self.TOKEN_KEY)
-        self.session = session
         self.logger = logger
         self.logger.info(f'Токен {self.TOKEN_KEY} инициализирован')
 
-    async def get_nomenclature(self, max_attempts: int = 5) -> list:
+    def get_nomenclature(self, max_attempts: int = 5) -> list:
         """ 
         Получаем список номенклатуры по API
         """
 
-        url = 'https://content-api.wildberries.ru/content/v2/get/cards/list'
-        headers = {'Authorization': self.TOKEN}
+        URL = 'https://content-api.wildberries.ru/content/v2/get/cards/list'
+        HEADERS = {'Authorization': self.TOKEN}
         limit = 100
         total = float('inf')
         updatedAt = None
         nmID = None
         cards = []
         
-        while total >= limit:
-            for attempt in range(max_attempts):
+        for attempt in range(max_attempts):
+            while total >= limit:
                 wait_time = 5 * (attempt + 1)
-                params = {
+                PARAMS = {
                     'settings': {
                         'cursor': {
                             'limit': limit,
@@ -219,130 +62,120 @@ class APIRequests:
                 }
                 
                 try:
-                    self.logger.info(f'Запрос URL: {url}, попытка: {attempt + 1}/{max_attempts}')
-                    async with self.session.post(url=url, headers=headers, json=params) as response:
+                    self.logger.info(f'Запрос URL: {URL}, попытка: {attempt + 1}/{max_attempts}')                    
+                    response = requests.post(url=URL, headers=HEADERS, json=PARAMS)
                         
-                        if response.status == 200:
-                            data = await response.json()
-                            items = data.get('cards', [])
-
-                            updatedAt = data.get('cursor', {}).get('updatedAt')
-                            nmID = data.get('cursor', {}).get('nmID')
-                            total = data.get('cursor', {}).get('total')
-                                                    
-                            if items:
-                                for item in items:
-                                    card = {}
-                                    card['brand'] = item.get('brand')
-                                    card['category'] = item.get('subjectName')
-                                    card['nmID'] = item.get('nmID')
-                                    card['article'] = item.get('vendorCode')
-                                    card['name'] = item.get('title')
-                                    card['skus'] = []
-                                    for size in item.get('sizes', []):
-                                        for sku in size.get('skus', []):
-                                            card['skus'].append(sku)
-
-                                    cards.append(card)
-                                    
-
-                            if total == 0: 
-                                self.logger.success(f'Все карточки получены. Всего: {len(cards)}')
-                                break
-                            else:
-                                self.logger.info(f'Получено карточек: {len(cards)}') 
+                    if response.status_code == 200:
+                        data = response.json()
+                        items = data.get('cards', [])
+                        updatedAt = data.get('cursor', {}).get('updatedAt')
+                        nmID = data.get('cursor', {}).get('nmID')
+                        total = data.get('cursor', {}).get('total')
+                                                
+                        if items:
+                            for item in items:
+                                card = {}
+                                card['brand'] = item.get('brand')
+                                card['category'] = item.get('subjectName')
+                                card['nmID'] = item.get('nmID')
+                                card['article'] = item.get('vendorCode')
+                                card['name'] = item.get('title')
+                                card['skus'] = []
+                                for size in item.get('sizes', []):
+                                    for sku in size.get('skus', []):
+                                        card['skus'].append(sku)
+                                cards.append(card)
                                 
-                        elif response.status == 429:
-                            self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                            await asyncio.sleep(wait_time)
-                            attempt += 1
-                            
-                        elif response.status in [400, 401, 403, 404]:
-                            error_details = await response.text()
-                            self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                            total = 0
+                        if total == 0: 
+                            self.logger.success(f'Все карточки получены. Всего: {len(cards)}')
                             break
-
                         else:
-                            error_details = await response.text()
-                            self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                            await asyncio.sleep(wait_time)
-                            attempt += 1
-
-                except aiohttp.ClientError as e:
+                            self.logger.info(f'Получено карточек: {len(cards)}') 
+                            
+                    elif response.status_code == 429:
+                        self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                        time.sleep(wait_time)
+                        attempt += 1
+                    elif response.status_code in [400, 401, 403, 404]:
+                        error_details = response.text()
+                        self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                        total = 0
+                        break
+                    else:
+                        error_details = response.text()
+                        self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                        time.sleep(wait_time)
+                        attempt += 1
+                        
+                except HTTPError as e:
                     self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                    await asyncio.sleep(wait_time)
-                    attempt += 1
-                except asyncio.TimeoutError as e:
+                    time.sleep(wait_time)
+                except Timeout as e:
                     self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
-                    attempt += 1
                 except Exception as e:
                     self.logger.error(f'Ошибка запроса: {e}')
                     break
         return cards
 
-    async def get_prices(self, max_attempts: int = 5) -> list:
+    def get_prices(self, max_attempts: int = 5) -> list:
         """
         Получаем цены по API
         """
 
-        url = 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter'
-        headers = {'Authorization': self.TOKEN}
-        cards = []
-        params = {
+        URL = 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter'
+        HEADERS = {'Authorization': self.TOKEN}
+        PARAMS = {
             'limit': 1000
         }
+        cards = []
        
         for attempt in range(max_attempts): 
             wait_time = 5 * (attempt + 1)
             try:
-                async with self.session.get(url=url, headers=headers, params=params) as response:
-                    self.logger.info(f'Запрос URL: {url}, попытка: {attempt + 1}/{max_attempts}')
-
-                    if response.status == 200:
-                        data = await response.json()
-                        items = data.get('data', {}).get('listGoods', [])
-
-                        self.logger.info(f'Получено: {len(items)} товара')
-
-                        for item in items:
-                            card = {}
-                            card['nmID'] = item.get('nmID', None)
-                            card['price'] = item.get('sizes', [])[
-                                0].get('price', None)
-                            card['discount'] = item.get('discount', None)
-                            card['discountedPrice'] = int(
-                                round(card['price'] * (1 - card['discount']/100), 0))
-                            card['clubDiscount'] = item.get('clubDiscount', 0)
-                            card['clubDiscountedPrice'] = round(
-                                card['discountedPrice'] * (1 - card['clubDiscount']/100), 1)
-
-                            cards.append(card)
-                        self.logger.success(f'Все цены для токена "{self.TOKEN_KEY}" успешно получены!')
-                        return cards
-
-                    elif response.status == 429:
-                                self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                                await asyncio.sleep(wait_time)
-                                attempt += 1
-                                
-                    elif response.status in [400, 401, 403, 404]:
-                        error_details = await response.text()
-                        self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                        break
+                response = requests.get(url=URL, headers=HEADERS, params=PARAMS)
+                self.logger.info(f'Запрос URL: {URL}, попытка: {attempt + 1}/{max_attempts}')
+                if response.status_code == 200:
+                    data = response.json()
+                    items = data.get('data', {}).get('listGoods', [])
+                    self.logger.info(f'Получено: {len(items)} товара')
                     
-                    else:
-                        error_details = await response.text()
-                        self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                        await asyncio.sleep(wait_time)
-                        attempt += 1
+                    for item in items:
+                        card = {}
+                        card['nmID'] = item.get('nmID', None)
+                        card['price'] = item.get('sizes', [])[
+                            0].get('price', None)
+                        card['discount'] = item.get('discount', None)
+                        card['discountedPrice'] = int(
+                            round(card['price'] * (1 - card['discount']/100), 0))
+                        card['clubDiscount'] = item.get('clubDiscount', 0)
+                        card['clubDiscountedPrice'] = round(
+                            card['discountedPrice'] * (1 - card['clubDiscount']/100), 1)
+                        cards.append(card)
+                    self.logger.success(f'Все цены для токена "{self.TOKEN_KEY}" успешно получены!')
+                    return cards
+                
+                elif response.status_code == 429:
+                    self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
+                            
+                elif response.status_code in [400, 401, 403, 404]:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                    break
+                
+                else:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
 
-            except aiohttp.ClientError as e:
+            except HTTPError as e:
                 self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                await asyncio.sleep(wait_time)
+                time.sleep(wait_time)
                 attempt += 1
                 
-            except asyncio.TimeoutError as e:
+            except Timeout as e:
                 self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
                 attempt += 1
                 
@@ -351,61 +184,60 @@ class APIRequests:
                 break
 
 
-    async def get_orders(self, max_attempts: int = 5) -> list:
+    def get_orders(self, max_attempts: int = 5) -> list:
         """
         Получаем заказы по API
         """
 
-        url = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders'
-        headers = {'Authorization': self.TOKEN}
+        URL = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders'
+        HEADERS = {'Authorization': self.TOKEN}
         dateFrom = (datetime.now(ZoneInfo('Europe/Moscow')).date() -
                     relativedelta(months=1)).isoformat()
-        params = {'dateFrom': dateFrom}
+        PARAMS = {'dateFrom': dateFrom}
+
         orders = []
         
         for attempt in range(max_attempts):
             wait_time = 5 * (attempt + 1)
             try:
-                async with self.session.get(url=url, headers=headers, params=params) as response:
-                    self.logger.info(f'Запрос URL: {url}, попытка: {attempt + 1}/{max_attempts}')
-
-                    if response.status == 200:
-                        data = await response.json()
-
-                        for item in data:
-                            if item.get('isCancel', False) is False:
-                                order = {}
-                                order['region'] = item.get('oblastOkrugName')
-                                order['article'] = item.get('supplierArticle')
-                                order['nmID'] = item.get('nmId')
-                                order['category'] = item.get('subject')
-                                order['brand'] = item.get('brand')
-
-                                orders.append(order)
-                        return orders
-
-                    elif response.status == 429:
-                                self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                                await asyncio.sleep(wait_time)
-                                attempt += 1
-                                
-                    elif response.status in [400, 401, 403, 404]:
-                        error_details = await response.text()
-                        self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                        break
+                response = requests.get(url=URL, headers=HEADERS, params=PARAMS)
+                self.logger.info(f'Запрос URL: {URL}, попытка: {attempt + 1}/{max_attempts}')
+                if response.status_code == 200:
+                    data = response.json()
                     
-                    else:
-                        error_details = await response.text()
-                        self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                        await asyncio.sleep(wait_time)
-                        attempt += 1
+                    for item in data:
+                        if item.get('isCancel', False) is False:
+                            order = {}
+                            order['region'] = item.get('oblastOkrugName')
+                            order['article'] = item.get('supplierArticle')
+                            order['nmID'] = item.get('nmId')
+                            order['category'] = item.get('subject')
+                            order['brand'] = item.get('brand')
+                            orders.append(order)
+                    return orders
 
-            except aiohttp.ClientError as e:
+                elif response.status_code == 429:
+                    self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
+                            
+                elif response.status_code in [400, 401, 403, 404]:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                    break
+                
+                else:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
+
+            except HTTPError as e:
                 self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                await asyncio.sleep(wait_time)
+                time.sleep(wait_time)
                 attempt += 1
                 
-            except asyncio.TimeoutError as e:
+            except Timeout as e:
                 self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
                 attempt += 1
                 
@@ -418,19 +250,19 @@ class APIRequests:
         Получение поставок
         """
         
-        url = 'https://supplies-api.wildberries.ru/api/v1/supplies'
-        headers = {'Authorization': self.TOKEN}
+        URL = 'https://supplies-api.wildberries.ru/api/v1/supplies'
+        HEADERS = {'Authorization': self.TOKEN}
         dates = [{
             'from': (datetime.now(ZoneInfo('Europe/Moscow')).date() - relativedelta(months=1)).isoformat(),
             'type': 'supplyDate'
             }]
         statusIDs = [3]
-        params = {
+        PARAMS = {
             "dates": dates,
             "statusIDs": statusIDs
         }
 
-        async def get_supplies_IDs() -> list:
+        def get_supplies_IDs() -> list:
             """ 
             Получаем ID всех созданных поставок
             """
@@ -438,41 +270,41 @@ class APIRequests:
             for attempt in range(max_attempts):
                 wait_time = 5 * (attempt + 1)
                 try:
-                    self.logger.info(f'Запрос URL: {url}. Попытка: {attempt + 1}/{max_attempts}')
-                    async with self.session.post(url=url, headers=headers, json=params) as response:
-                    
-                        if response.status == 200:
-                            data = await response.json()
-                            for item in data:
-                                supply = {}
-                                supply['supplyID'] = item.get('supplyID')
-                                supplies_IDs.append(supply)
-                            
-                            self.logger.success(f'ID всех поставок получены. Количество поставок: {len(supplies_IDs)}')
-                            return supplies_IDs
-                        
-                        elif response.status == 429:
-                            self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                            await asyncio.sleep(wait_time)
-                            attempt += 1  
-                                                
-                        elif response.status in [400, 401, 403, 404]:
-                            error_details = await response.text()
-                            self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                            break
-                        
-                        else:
-                            error_details = await response.text()
-                            self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                            await asyncio.sleep(wait_time)
-                            attempt += 1
+                    self.logger.info(f'Запрос URL: {URL}. Попытка: {attempt + 1}/{max_attempts}')
+                    response = requests.post(url=URL, headers=HEADERS, json=PARAMS)
+            
+                    if response.status_code == 200:
+                        data = response.json()
+                        for item in data:
+                            supply = {}
+                            supply['supplyID'] = item.get('supplyID')
+                            supplies_IDs.append(supply)
 
-                except aiohttp.ClientError as e:
+                        self.logger.success(f'ID всех поставок получены. Количество поставок: {len(supplies_IDs)}')
+                        return supplies_IDs
+
+                    elif response.status_code == 429:
+                        self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                        time.sleep(wait_time)
+                        attempt += 1  
+
+                    elif response.status_code in [400, 401, 403, 404]:
+                        error_details = response.text()
+                        self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                        break
+                      
+                    else:
+                        error_details = response.text()
+                        self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                        time.sleep(wait_time)
+                        attempt += 1
+
+                except HTTPError as e:
                     self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                    await asyncio.sleep(wait_time)
+                    time.sleep(wait_time)
                     attempt += 1
                     
-                except asyncio.TimeoutError as e:
+                except Timeout as e:
                     self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
                     attempt += 1
                     
@@ -481,13 +313,13 @@ class APIRequests:
                     break
                 
 
-        async def get_supplies_details():
+        def get_supplies_details():
             """
             По полученным ID получаем подробную информацию о всех поставках
             """
             supplies_details = []
             supplies_goods = []
-            supplies_IDs = await get_supplies_IDs()
+            supplies_IDs = get_supplies_IDs()
             if supplies_IDs:
                 for supply_ID in supplies_IDs: 
                     for attempt in range(max_attempts):
@@ -495,89 +327,88 @@ class APIRequests:
                         url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}'
                         
                         try:
-                            self.logger.info(f'Запрос: {url}. Попытка {attempt + 1}/{max_attempts}')
-                            async with self.session.get(url=url, headers=headers) as response:
-                                if response.status == 200:
-                                    supply_item = await response.json()
-                                    supply = {
-                                            'supplyID': supply_ID["supplyID"],
-                                            'warehouse': supply_item.get('warehouseName'),
-                                        }
-
-                                    supplies_details.append(supply)
-                                    break
-                                    
-                                elif response.status == 429:
-                                    self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                                    await asyncio.sleep(wait_time)
-                                    attempt += 1
-                                            
-                                elif response.status in [400, 401, 403, 404]:
-                                    error_details = await response.text()
-                                    self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                                    break
+                            self.logger.info(f'Запрос: {URL}. Попытка {attempt + 1}/{max_attempts}')
+                            response = requests.get(url=URL, headers=HEADERS)
+                            if response.status_code == 200:
+                                supply_item = response.json()
+                                supply = {
+                                        'supplyID': supply_ID["supplyID"],
+                                        'warehouse': supply_item.get('warehouseName'),
+                                    }
+                                supplies_details.append(supply)
+                                break
                                 
-                                else:
-                                    error_details = await response.text()
-                                    self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                                    await asyncio.sleep(wait_time)
-                                    attempt += 1
-
-                        except aiohttp.ClientError as e:
+                            elif response.status_code == 429:
+                                self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                                time.sleep(wait_time)
+                                attempt += 1
+                                        
+                            elif response.status_code in [400, 401, 403, 404]:
+                                error_details = response.text()
+                                self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                                break
+                            
+                            else:
+                                error_details = response.text()
+                                self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                                time.sleep(wait_time)
+                                attempt += 1
+                                
+                        except HTTPError as e:
                             self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                            await asyncio.sleep(wait_time)
+                            time.sleep(wait_time)
                             attempt += 1
                             
-                        except asyncio.TimeoutError as e:
+                        except Timeout as e:
                             self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
                             attempt += 1
                             
                         except Exception as e:
                             self.logger.error(f'Ошибка запроса: {e}')
                             break
-                        
+                                    
                          
                     for attempt in range(max_attempts):
                         url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}/goods'
                         
                         try:
                             self.logger.info(f'Запрос: {url}. Попытка {attempt + 1}/{max_attempts})')
-                            async with self.session.get(url=url, headers=headers) as response:
-                                if response.status == 200:
-                                    supplies_goods_json = await response.json()
-                                    for supply_item in supplies_goods_json:
-                                        supply_product = {
-                                            'supplyID': supply_ID["supplyID"],
-                                            'barcode': supply_item.get('barcode'),
-                                            'article': supply_item.get('vendorCode'),
-                                            'nmID': supply_item.get('nmID'),
-                                            'quantity': supply_item.get('quantity')
-                                        }
-                                        supplies_goods.append(supply_product)
-                                    break
-                                    
-                                elif response.status == 429:
-                                    self.logger.warning(f"{response.status}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
-                                    await asyncio.sleep(wait_time)
-                                    attempt += 1
-                                              
-                                elif response.status in [400, 401, 403, 404]:
-                                    error_details = await response.text()
-                                    self.logger.error(f"{response.status}. Ошибка запроса: {error_details}")
-                                    break
+                            response = requests.get(url=URL, headers=HEADERS)
+                            if response.status_code == 200:
+                                supplies_goods_json = response.json()
+                                for supply_item in supplies_goods_json:
+                                    supply_product = {
+                                        'supplyID': supply_ID["supplyID"],
+                                        'barcode': supply_item.get('barcode'),
+                                        'article': supply_item.get('vendorCode'),
+                                        'nmID': supply_item.get('nmID'),
+                                        'quantity': supply_item.get('quantity')
+                                    }
+                                    supplies_goods.append(supply_product)
+                                break
                                 
-                                else:
-                                    error_details = await response.text()
-                                    self.logger.error(f"{response.status}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
-                                    await asyncio.sleep(wait_time)
-                                    attempt += 1
-
-                        except aiohttp.ClientError as e:
+                            elif response.status_code == 429:
+                                self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                                time.sleep(wait_time)
+                                attempt += 1
+                                          
+                            elif response.status_code in [400, 401, 403, 404]:
+                                error_details = response.text()
+                                self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                                break
+                            
+                            else:
+                                error_details = response.text()
+                                self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                                time.sleep(wait_time)
+                                attempt += 1
+                                
+                        except HTTPError as e:
                             self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
-                            await asyncio.sleep(wait_time)
+                            time.sleep(wait_time)
                             attempt += 1
                             
-                        except asyncio.TimeoutError as e:
+                        except Timeout as e:
                             self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
                             attempt += 1
                             
@@ -587,7 +418,7 @@ class APIRequests:
                         
             return supplies_details, supplies_goods
         
-        supplies_details, supplies_goods = await get_supplies_details()
+        supplies_details, supplies_goods = get_supplies_details()
         if supplies_details:
             self.logger.success(f'Информация о {len(supplies_details)} поставках получена')
         if supplies_goods:
@@ -603,19 +434,207 @@ class APIRequests:
         except Exception:
             self.logger.error(f'Ошибка. Данные о поставках не получены!')
             return None
+   
 
+
+class WebDriver:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self, user_agent: str = None, url: str = None, cookies_need: str = None):
+        if not hasattr(self, '_initialized') or not self._initialized:
+            self.driver = None 
+            self.user_agent = user_agent or USER_AGENT
+            self.url = url or WB_URL
+            self.cookies_need = cookies_need or COOKIES_NEED
+            self.logger = logger
+            self.logger.info(f'Класс WebDriver инициализирован')
+            self._initialized = True
+        
+    def _get_wbaas_token(self, max_attempts: int = 3) -> str:
+        driver = Driver(
+            uc=True,
+            headless=True,
+            agent=self.user_agent
+        )
+        
+        try:
+            driver.open(self.url)
+            for attempt in range(max_attempts):
+                self.logger.info(f'Получение wbaas токена, попытка: {attempt + 1}/{max_attempts}')
+                wait_time = 5 * (attempt + 1)
+                cookies = driver.execute_cdp_cmd('Network.getAllCookies', {})
+                
+                for cookie in cookies.get('cookies', []):
+                    if cookie.get('name') == self.cookies_need:
+                        logger.success(f'Токен wbaas получен!')
+                        wbaas_token = cookie.get('value')
+                        return wbaas_token
+                    
+                    else:
+                        logger.error(f'Ошибка получения кукки. Повторная попытка через {wait_time}s')
+                        time.sleep(wait_time)
+                        
+            return None
+        
+        finally:
+            driver.quit()
+
+    def get_supplier_prices(self, supplier: str | int) -> list:
+        url = 'https://www.wildberries.ru/__internal/catalog/sellers/v4/catalog'
+        page = 1
+        COOKIES = {
+            COOKIES_NEED: WebDriver()._get_wbaas_token()
+        }
+        HEADERS = {
+            'user-agent': USER_AGENT
+        }
+        PARAMS = {
+            'ab_testing': 'false',
+            'appType': '1',
+            'curr': 'rub',
+            'dest': '123587059',
+            'hide_dtype': '9',
+            'hide_vflags': '4294967296',
+            'lang': 'ru',
+            'page': str(page),
+            'sort': 'popular',
+            'spp': '30',
+            'supplier': str(supplier),
+            'uclusters': '2',
+        }
+        
+        try:
+            response = requests.get(
+                url=url,
+                params=PARAMS,
+                cookies=COOKIES,
+                headers=HEADERS,
+                )
+
+            result = response.json()
+            total_products = result.get('total', 0)
+            pages = (total_products//100) + 1
+            
+        except Exception:
+            pass
+        
+        if response.status_code == 200 and total_products > 0:
+            self.logger.info(f'Сайт Wildberries доступен, данные собираются')
+            goods = []
+            for page in range(pages):
+                PARAMS = PARAMS.copy()
+                PARAMS['page'] = str(page + 1)   
+                       
+                self.logger.info(f'Получение товаров {page + 1} страницы')
+                response = requests.get(
+                'https://www.wildberries.ru/__internal/catalog/sellers/v4/catalog',
+                params=PARAMS,
+                cookies=COOKIES,
+                headers=HEADERS,
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    products = result.get('products', [])
+                    
+                    for product in products:
+                        good = {}
+                        good['supplier'] = product.get('supplier')            
+                        good['brand'] = product.get('brand')
+                        good['nmID'] = product.get('id')
+                        good['name'] = product.get('name')
+                        good['wbPrice'] = product.get('sizes')[0].get('price').get('product')/100
+                        goods.append(good)
+                    self.logger.info(f'Товары {page + 1} страницы получены')
+            self.logger.info(f'Все товары получены: {len(goods)}')
+            return goods
+        else:
+            self.logger.error(f'{response.status_code}. Ошибка доступа к сайту Wildberries!')
+            return None      
+                    
+        
+    def get_wallet_discount_percent(self) -> int:
+        COOKIES = {
+            COOKIES_NEED: WebDriver()._get_wbaas_token()
+        }
+        HEADERS = {
+            'user-agent': USER_AGENT
+        }
+        self.logger.info("Получаем настройки скидок")
+
+        try:
+            response = requests.get(SETTINGS_URL, headers=HEADERS, cookies=COOKIES, timeout=5)
+            response.raise_for_status()
+            settings = response.json().get("variables")
+            max_price = int(settings.get("wlt1DiscountDisplayMaxPrice", 0))
+            min_delta = int(settings.get("pricesDeltaToShowSale", 0))
+        except Exception:
+            self.logger.exception("Ошибка при получении настроек скидок")
+            return 0, 0, 0
+
+        self.logger.success("Настройки скидок успешно получены")
+
+        
+        self.logger.info("Получаем процент скидки для типа «Незалогиненный кошелёк»")
+
+        try:
+            response = requests.get(DEFAULT_PAYMENT_URL, headers=HEADERS, cookies=COOKIES, timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+            
+        except Exception:
+            self.logger.exception("Ошибка при получении default-payment.json")
+            return 0
+
+        self.logger.debug("Ответ default-payment.json получен")
+        
+        if payload.get("state") != 0:
+            self.logger.warning("Скидка ВБ Кошелька не применяется")
+            return 0
+
+        for item in payload.get("data", []):
+            self.logger.debug("Проверяем тип оплаты на сайте")
+
+            if (item.get("wc_type") == "Незалогиненный кошелёк"
+                and item.get("is_active") is True):
+                try:
+                    discount = item["discount_value"]
+        
+                except Exception:
+                    self.logger.warning("Некорректное значение скидки")
+                    return 0
+
+                self.logger.success("Найдена скидка для ВБ Кошелька")
+                return int(discount)
+
+        self.logger.warning("Скидка для «Незалогиненный кошелёк» не найдена")
+        return 0
+
+ 
 class Reports:
-    def __init__(self):
-        pass    
-     
-    async def supplies(self) -> None:
-        async with aiohttp.ClientSession() as supplies_session:
-            api_requests = APIRequests(session=supplies_session, TOKEN_KEY='КОСТРИК')        
-            result = await asyncio.gather(
-                    api_requests.get_nomenclature(),
-                    api_requests.get_supplies()
-            )
-        nomenclature, supplies = result[0], result[1]
+  
+    def __init__(self, TOKEN_KEY: str, supplier: int | str):
+            self.TOKEN_KEY = TOKEN_KEY
+            self.supplier = supplier
+            self.logger = logger
+            self.logger.info(f'Отчеты инициализированы')
+            
+    def nomenclature(self) -> None:
+        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_nomenclature())
+        file_name = 'Номенклатура.xlsx'
+        with pd.ExcelWriter(file_name) as writer:
+            nomenclature.to_excel(writer, sheet_name='Номенклатура', index=False)
+            logger.success(f'Файл {file_name} сохранен!')
+        
+    def supplies(self) -> None:
+        nomenclature = APIRequests(self.TOKEN_KEY).get_nomenclature()
+        supplies = APIRequests().get_supplies()
         supplies = pd.merge(left=pd.DataFrame(supplies), right=pd.DataFrame(nomenclature)[['article', 'name']], on='article')
         supplies = supplies[['supplyID', 'barcode', 'article', 'nmID', 'name', 'quantity', 'region', 'warehouse']]
         
@@ -626,25 +645,35 @@ class Reports:
             supplies.to_excel(writer, sheet_name='Поставки по товарам', index=False)
             logger.success(f'Файл {file_name} сохранен!')
 
-    async def prices(self) -> None:
-        async with aiohttp.ClientSession() as prices_session:
-            api_requests = APIRequests(session=prices_session, TOKEN_KEY='КОСТРИК')        
-            result = await asyncio.gather(
-                    api_requests.get_prices(),
-            )
-            prices = pd.DataFrame(result[0])
-            
+    def prices(self) -> None:
+        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_nomenclature())
+        prices_API_df = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_prices())
+        prices_WB_df = pd.DataFrame(WebDriver().get_supplier_prices(self.supplier))
+        wallet_discount = WebDriver().get_wallet_discount_percent()
+        min_delta_wallet_discount = 
+        nomenclature = nomenclature[['category', 'nmID', 'article', 'name']]
+        prices_WB_df = prices_WB_df.drop(['name'], axis=1)
+        prices = pd.merge(left=nomenclature, right=prices_API_df, on='nmID', how='left')
+        prices = pd.merge(left=prices, right=prices_WB_df, on='nmID', how='left')
+        prices['wbDiscount'] = round((1 - prices['wbPrice']/prices['clubDiscountedPrice']) * 100)
+        prices = prices[['supplier', 'brand', 'category', 'article', 'nmID', 'name', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'wbDiscount', 'wbPrice']]
         file_name = 'Цены.xlsx'
         with pd.ExcelWriter(file_name) as writer:
             prices.to_excel(writer, sheet_name='Цены', index=False)
             logger.success(f'Файл {file_name} сохранен!')
+            
+    def orders(self) -> None:
+        orders = APIRequests().get_orders(),
+        file_name = 'Заказы.xlsx'
+        with pd.ExcelWriter(file_name) as writer:
+            orders.to_excel(writer, sheet_name='Заказы', index=False)
+            logger.success(f'Файл {file_name} сохранен!')   
     
-async def main():
-    reports = Reports()
-    await asyncio.gather(
-        reports.prices(),
-        reports.supplies()
-        )
-
+def main():
+    # Reports(TOKEN_KEY='КОСТРИК', supplier=53699).prices()
+    # Reports(TOKEN_KEY='КОСТРИК', supplier=53699).prices()
+    print(WebDriver().get_discount_settings())
+    print(WebDriver().get_wallet_discount_percent())
+    
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
