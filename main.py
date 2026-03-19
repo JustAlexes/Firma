@@ -1,3 +1,7 @@
+import csv
+import io
+import math
+import zipfile
 from loguru import logger
 import time
 from dotenv import load_dotenv
@@ -5,6 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dateutil.relativedelta import relativedelta
 import os
+import numpy as np
 import pandas as pd
 import requests
 from fake_useragent import UserAgent
@@ -24,12 +29,12 @@ SETTINGS_URL = "https://static-basket-01.wbbasket.ru/vol0/data/settings-front.js
     
 class APIRequests:
 
-    def __init__(self, TOKEN_KEY: str):
+    def __init__(self, TOKEN_NAME: str):
         load_dotenv()
-        self.TOKEN_KEY = TOKEN_KEY
-        self.TOKEN = os.getenv(self.TOKEN_KEY)
+        self.TOKEN_NAME = TOKEN_NAME
+        self.TOKEN_KEY = os.getenv(self.TOKEN_NAME)
         self.logger = logger
-        self.logger.info(f'Токен {self.TOKEN_KEY} инициализирован')
+        self.logger.info(f'Токен {self.TOKEN_NAME} инициализирован')
 
     def get_nomenclature(self, max_attempts: int = 5) -> list:
         """ 
@@ -37,7 +42,7 @@ class APIRequests:
         """
 
         URL = 'https://content-api.wildberries.ru/content/v2/get/cards/list'
-        HEADERS = {'Authorization': self.TOKEN}
+        HEADERS = {'Authorization': self.TOKEN_KEY}
         limit = 100
         total = float('inf')
         updatedAt = None
@@ -123,7 +128,7 @@ class APIRequests:
         """
 
         URL = 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter'
-        HEADERS = {'Authorization': self.TOKEN}
+        HEADERS = {'Authorization': self.TOKEN_KEY}
         PARAMS = {
             'limit': 1000
         }
@@ -151,7 +156,7 @@ class APIRequests:
                         card['clubDiscountedPrice'] = round(
                             card['discountedPrice'] * (1 - card['clubDiscount']/100), 1)
                         cards.append(card)
-                    self.logger.success(f'Все цены для токена "{self.TOKEN_KEY}" успешно получены!')
+                    self.logger.success(f'Все цены для токена "{self.TOKEN_NAME}" успешно получены!')
                     return cards
                 
                 elif response.status_code == 429:
@@ -184,16 +189,19 @@ class APIRequests:
                 break
 
 
-    def get_orders(self, max_attempts: int = 5) -> list:
+    def get_orders(self, datefrom: str, max_attempts: int = 5) -> list:
         """
         Получаем заказы по API
+        datefrom в формате dd.mm.yyyy
         """
 
         URL = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders'
-        HEADERS = {'Authorization': self.TOKEN}
-        dateFrom = (datetime.now(ZoneInfo('Europe/Moscow')).date() -
-                    relativedelta(months=1)).isoformat()
-        PARAMS = {'dateFrom': dateFrom}
+        HEADERS = {'Authorization': self.TOKEN_KEY}
+        dateFrom = str(datetime.strptime(datefrom, "%d.%m.%Y").strftime("%Y-%m-%d"))
+        PARAMS = {
+            'dateFrom': dateFrom,
+            'flag': 1
+                  }
 
         orders = []
         
@@ -205,16 +213,16 @@ class APIRequests:
                 if response.status_code == 200:
                     data = response.json()
                     
-                    for item in data:
-                        if item.get('isCancel', False) is False:
-                            order = {}
-                            order['region'] = item.get('oblastOkrugName')
-                            order['article'] = item.get('supplierArticle')
-                            order['nmID'] = item.get('nmId')
-                            order['category'] = item.get('subject')
-                            order['brand'] = item.get('brand')
-                            orders.append(order)
-                    return orders
+                    # for item in data:
+                    #     if item.get('isCancel', False) is False:
+                    #         order = {}
+                    #         order['brand'] = item.get('brand')
+                    #         order['category'] = item.get('subject')
+                    #         order['article'] = item.get('supplierArticle')
+                    #         order['nmID'] = item.get('nmId')
+                    #         order['priceWithDisc'] = item.get('priceWithDisc')
+                    #         orders.append(order)
+                    return data
 
                 elif response.status_code == 429:
                     self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
@@ -245,13 +253,13 @@ class APIRequests:
                 self.logger.error(f'Ошибка запроса: {e}')
                 break
 
-    async def get_supplies(self, max_attempts: int = 5) -> list:
+    def get_supplies(self, max_attempts: int = 5) -> list:
         """
         Получение поставок
         """
         
         URL = 'https://supplies-api.wildberries.ru/api/v1/supplies'
-        HEADERS = {'Authorization': self.TOKEN}
+        HEADERS = {'Authorization': self.TOKEN_KEY}
         dates = [{
             'from': (datetime.now(ZoneInfo('Europe/Moscow')).date() - relativedelta(months=1)).isoformat(),
             'type': 'supplyDate'
@@ -324,7 +332,7 @@ class APIRequests:
                 for supply_ID in supplies_IDs: 
                     for attempt in range(max_attempts):
                         wait_time = 5 * (attempt + 1)
-                        url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}'
+                        URL = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}'
                         
                         try:
                             self.logger.info(f'Запрос: {URL}. Попытка {attempt + 1}/{max_attempts}')
@@ -333,6 +341,7 @@ class APIRequests:
                                 supply_item = response.json()
                                 supply = {
                                         'supplyID': supply_ID["supplyID"],
+                                        'supplyDate': datetime.strptime(datetime.fromisoformat(supply_item.get('supplyDate')).strftime('%d.%m.%Y'), '%d.%m.%Y').date(),
                                         'warehouse': supply_item.get('warehouseName'),
                                     }
                                 supplies_details.append(supply)
@@ -369,10 +378,10 @@ class APIRequests:
                                     
                          
                     for attempt in range(max_attempts):
-                        url = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}/goods'
+                        URL = f'https://supplies-api.wildberries.ru/api/v1/supplies/{supply_ID["supplyID"]}/goods'
                         
                         try:
-                            self.logger.info(f'Запрос: {url}. Попытка {attempt + 1}/{max_attempts})')
+                            self.logger.info(f'Запрос: {URL}. Попытка {attempt + 1}/{max_attempts})')
                             response = requests.get(url=URL, headers=HEADERS)
                             if response.status_code == 200:
                                 supplies_goods_json = response.json()
@@ -427,14 +436,63 @@ class APIRequests:
         try:
             supplies = pd.merge(left=pd.DataFrame(supplies_goods), right=pd.DataFrame(supplies_details), on='supplyID')
             supplies = pd.merge(left=supplies, right=pd.read_excel('required_files/Склады по регионам.xlsx', index_col=False), on='warehouse')
-            supplies = supplies[['supplyID', 'barcode', 'article', 'nmID', 'quantity', 'warehouse', 'region']]
+            supplies = supplies[['supplyID', 'supplyDate', 'barcode', 'article', 'nmID', 'quantity', 'warehouse', 'region']]
             self.logger.success(f'Информация о всех поставках получена')
             return supplies
         
         except Exception:
             self.logger.error(f'Ошибка. Данные о поставках не получены!')
             return None
-   
+ 
+    def get_commission(self, max_attempts: int = 5) -> list:
+        """
+        Получаем комиссии по API
+        """
+
+        URL = 'https://common-api.wildberries.ru/api/v1/tariffs/commission'
+        HEADERS = {'Authorization': self.TOKEN_KEY}
+        PARAMS = {'locale': 'ru'}
+        NEED_COMMISSION = ['Туалетная вода', 'Духи', 'Парфюмерные наборы', 'Гели']
+
+        for attempt in range(max_attempts):
+            wait_time = 5 * (attempt + 1)
+            try:
+                response = requests.get(url=URL, headers=HEADERS, params=PARAMS)
+                self.logger.info(f'Запрос URL: {URL}, попытка: {attempt + 1}/{max_attempts}')
+                if response.status_code == 200:
+                    data = response.json()
+                    data = [item for item in data['report'] if item.get('subjectName') in NEED_COMMISSION]
+
+                    return data
+
+                elif response.status_code == 429:
+                    self.logger.warning(f"{response.status_code}. Превышен лимит запросов. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
+                            
+                elif response.status_code in [400, 401, 403, 404]:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}")
+                    break
+                
+                else:
+                    error_details = response.text()
+                    self.logger.error(f"{response.status_code}. Ошибка запроса: {error_details}. Повторная попытка через {wait_time}s")
+                    time.sleep(wait_time)
+                    attempt += 1
+
+            except HTTPError as e:
+                self.logger.error(f'Ошибка клиента: {e}. Повторная попытка через {wait_time}s')
+                time.sleep(wait_time)
+                attempt += 1
+                
+            except Timeout as e:
+                self.logger.error(f'Превышено время запроса: {e}. Повторная попытка через {wait_time}s.')
+                attempt += 1
+                
+            except Exception as e:
+                self.logger.error(f'Ошибка запроса: {e}')
+                break
 
 
 class WebDriver:
@@ -486,7 +544,7 @@ class WebDriver:
             driver.quit()
 
     def get_supplier_prices(self, supplier: str | int) -> list:
-        url = 'https://www.wildberries.ru/__internal/catalog/sellers/v4/catalog'
+        URL = 'https://www.wildberries.ru/__internal/catalog/sellers/v4/catalog'
         page = 1
         COOKIES = {
             COOKIES_NEED: WebDriver()._get_wbaas_token()
@@ -511,7 +569,7 @@ class WebDriver:
         
         try:
             response = requests.get(
-                url=url,
+                url=URL,
                 params=PARAMS,
                 cookies=COOKIES,
                 headers=HEADERS,
@@ -566,8 +624,8 @@ class WebDriver:
         HEADERS = {
             'user-agent': USER_AGENT
         }
+        
         self.logger.info("Получаем настройки скидок")
-
         try:
             response = requests.get(SETTINGS_URL, headers=HEADERS, cookies=COOKIES, timeout=5)
             response.raise_for_status()
@@ -577,26 +635,22 @@ class WebDriver:
         except Exception:
             self.logger.exception("Ошибка при получении настроек скидок")
             return 0, 0, 0
-
         self.logger.success("Настройки скидок успешно получены")
 
         
         self.logger.info("Получаем процент скидки для типа «Незалогиненный кошелёк»")
-
         try:
             response = requests.get(DEFAULT_PAYMENT_URL, headers=HEADERS, cookies=COOKIES, timeout=5)
             response.raise_for_status()
-            payload = response.json()
-            
+            payload = response.json()    
         except Exception:
             self.logger.exception("Ошибка при получении default-payment.json")
-            return 0
-
+            return 0, 0, 0
         self.logger.debug("Ответ default-payment.json получен")
         
         if payload.get("state") != 0:
             self.logger.warning("Скидка ВБ Кошелька не применяется")
-            return 0
+            return 0, 0, 0
 
         for item in payload.get("data", []):
             self.logger.debug("Проверяем тип оплаты на сайте")
@@ -608,72 +662,124 @@ class WebDriver:
         
                 except Exception:
                     self.logger.warning("Некорректное значение скидки")
-                    return 0
+                    return 0, 0, 0
 
                 self.logger.success("Найдена скидка для ВБ Кошелька")
-                return int(discount)
+                return int(max_price), int(min_delta), int(discount)
 
         self.logger.warning("Скидка для «Незалогиненный кошелёк» не найдена")
-        return 0
+        return 0, 0, 0
 
  
 class Reports:
   
-    def __init__(self, TOKEN_KEY: str, supplier: int | str):
-            self.TOKEN_KEY = TOKEN_KEY
+    def __init__(self, TOKEN_NAME: str = None, supplier: int | str = None):
+            self.TOKEN_NAME = TOKEN_NAME
+            if self.TOKEN_NAME != None:
+                self.TOKEN_KEY = os.getenv(TOKEN_NAME)
             self.supplier = supplier
             self.logger = logger
             self.logger.info(f'Отчеты инициализированы')
             
-    def nomenclature(self) -> None:
-        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_nomenclature())
-        file_name = 'Номенклатура.xlsx'
-        with pd.ExcelWriter(file_name) as writer:
-            nomenclature.to_excel(writer, sheet_name='Номенклатура', index=False)
-            logger.success(f'Файл {file_name} сохранен!')
+    def nomenclature(self) -> pd.DataFrame:
+        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_NAME).get_nomenclature())
+        # file_name = 'Номенклатура.xlsx'
+        # with pd.ExcelWriter(file_name) as writer:
+        #     nomenclature.to_excel(writer, sheet_name='Номенклатура', index=False)
+        #     logger.success(f'Файл {file_name} сохранен!')
+        return nomenclature
         
-    def supplies(self) -> None:
-        nomenclature = APIRequests(self.TOKEN_KEY).get_nomenclature()
-        supplies = APIRequests().get_supplies()
-        supplies = pd.merge(left=pd.DataFrame(supplies), right=pd.DataFrame(nomenclature)[['article', 'name']], on='article')
-        supplies = supplies[['supplyID', 'barcode', 'article', 'nmID', 'name', 'quantity', 'region', 'warehouse']]
+    def supplies(self) -> pd.DataFrame:
+        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_NAME).get_nomenclature())
+        supplies = pd.DataFrame(APIRequests(self.TOKEN_NAME).get_supplies())
         
-        file_name = 'Поставки.xlsx'
-        with pd.ExcelWriter(file_name) as writer:
-            supplies.to_excel(writer, sheet_name='Поставки по складам', index=False)
-            supplies = supplies[['article', 'nmID', 'name', 'quantity']].groupby(['article', 'nmID', 'name'], as_index=False)['quantity'].sum()
-            supplies.to_excel(writer, sheet_name='Поставки по товарам', index=False)
-            logger.success(f'Файл {file_name} сохранен!')
+        if all(not df.empty for df in [nomenclature, supplies]):
+            supplies = supplies.merge(right=nomenclature[['article', 'name']], on='article')
+            supplies = supplies[['supplyID','supplyDate', 'barcode', 'article', 'nmID', 'name', 'quantity', 'region', 'warehouse']]
+            supplies = supplies.rename(columns={
+                'supplyID': 'Номер поставки', 
+                'supplyDate': 'Дата поставки', 
+                'barcode': 'Штрихкод', 
+                'article': 'Артикул продавца',
+                'nmID': 'Артикул WB',
+                'name': 'Наименование',
+                'quantity': 'Количество',
+                'region': 'Регион',
+                'warehouse': 'Склад'
+            })
+            supplies = supplies.sort_values(by='Дата поставки', ascending=False)
+            file_name = f'Поставки {self.TOKEN_NAME}.xlsx'
+            with pd.ExcelWriter(file_name) as writer:
+                supplies.to_excel(writer, sheet_name='Поставки по складам', index=False)
+                supplies = supplies[['Артикул продавца', 'Артикул WB', 'Наименование', 'Количество']].groupby(['Артикул продавца', 'Артикул WB', 'Наименование'], as_index=False)['Количество'].sum()
+                supplies.to_excel(writer, sheet_name='Поставки по товарам', index=False)
+                logger.success(f'Файл {file_name} сохранен!')
+            return supplies
 
-    def prices(self) -> None:
-        nomenclature = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_nomenclature())
-        prices_API_df = pd.DataFrame(APIRequests(self.TOKEN_KEY).get_prices())
-        prices_WB_df = pd.DataFrame(WebDriver().get_supplier_prices(self.supplier))
-        wallet_discount = WebDriver().get_wallet_discount_percent()
-        min_delta_wallet_discount = 
-        nomenclature = nomenclature[['category', 'nmID', 'article', 'name']]
-        prices_WB_df = prices_WB_df.drop(['name'], axis=1)
-        prices = pd.merge(left=nomenclature, right=prices_API_df, on='nmID', how='left')
-        prices = pd.merge(left=prices, right=prices_WB_df, on='nmID', how='left')
-        prices['wbDiscount'] = round((1 - prices['wbPrice']/prices['clubDiscountedPrice']) * 100)
-        prices = prices[['supplier', 'brand', 'category', 'article', 'nmID', 'name', 'price', 'discount', 'discountedPrice', 'clubDiscount', 'clubDiscountedPrice', 'wbDiscount', 'wbPrice']]
-        file_name = 'Цены.xlsx'
-        with pd.ExcelWriter(file_name) as writer:
-            prices.to_excel(writer, sheet_name='Цены', index=False)
-            logger.success(f'Файл {file_name} сохранен!')
+    def prices(self) -> pd.DataFrame:
+        if self.TOKEN_NAME != None:
+            nomenclature = pd.DataFrame(APIRequests(self.TOKEN_NAME).get_nomenclature())
+            prices_API_df = pd.DataFrame(APIRequests(self.TOKEN_NAME).get_prices())
+        if self.supplier != None:
+            prices_WB_df = pd.DataFrame(WebDriver().get_supplier_prices(self.supplier))
+        if self.TOKEN_NAME != None or self.supplier != None:
+            max_price, min_delta, wallet_discount = WebDriver().get_wallet_discount_percent()
             
-    def orders(self) -> None:
-        orders = APIRequests().get_orders(),
-        file_name = 'Заказы.xlsx'
-        with pd.ExcelWriter(file_name) as writer:
-            orders.to_excel(writer, sheet_name='Заказы', index=False)
-            logger.success(f'Файл {file_name} сохранен!')   
+        # Полноценный отчет
+        if self.TOKEN_NAME != None and self.supplier != None:
+            if all(not df.empty for df in [nomenclature, prices_API_df, prices_WB_df]) and (0 not in (max_price, min_delta, wallet_discount)):
+                nomenclature = nomenclature[['category', 'nmID', 'article', 'name']]
+                prices_WB_df = prices_WB_df.drop(['name'], axis=1)
+                prices = pd.merge(left=nomenclature, right=prices_API_df, on='nmID', how='left')
+                prices = pd.merge(left=prices, right=prices_WB_df, on='nmID', how='left')
+                prices['wbDiscount'] = round((1 - prices['wbPrice']/prices['clubDiscountedPrice']) * 100)
+                prices = prices[['supplier', 'brand', 'category', 'article', 'nmID', 'name', 'price', 'discount', 'discountedPrice', 'wbDiscount', 'wbPrice']]
+                prices.loc[(prices['wbPrice'] > 0), 'max_price'] = max_price
+                prices.loc[(prices['wbPrice'] > 0), 'min_delta'] = min_delta
+                prices.loc[(prices['wbPrice'] > 0), 'wallet_discount'] = wallet_discount
+                prices.loc[(prices['wbPrice'] < prices['max_price']), 'personal_price'] = np.floor(prices['wbPrice'] * (1 - (prices['wallet_discount']+1)/100))
+                prices.loc[(prices['wbPrice'] >= prices['max_price']), 'personal_price'] = prices['wbPrice']
+
+                prices = prices.drop(columns=['max_price', 'min_delta'], axis=1)
+                prices = prices.rename(columns={
+                                'supplier': 'Продавец', 
+                                'brand': 'Бренд', 
+                                'category': 'Категория',
+                                'article': 'Артикул продавца',
+                                'nmID': 'Артикул WB',
+                                'name': 'Наименование',
+                                'price': 'Цена',
+                                'discount': 'Скидка',
+                                'discountedPrice': 'Цена со скидкой',
+                                'wbDiscount': 'Скидка WB',
+                                'wbPrice': 'Цена со скидкой WB',
+                                'wallet_discount': 'Скидка WB Wallet',
+                                'personal_price': 'Цена покупателя'
+                            })
+
+        # Отчет только по сайту
+        if self.supplier != None:
+            if not prices_WB_df.empty and (0 not in (max_price, min_delta, wallet_discount)):
+                prices = prices_WB_df
+        
+        # file_name = f'Цены {self.TOKEN_NAME}.xlsx'
+        # with pd.ExcelWriter(file_name) as writer:
+        #     prices.to_excel(writer, sheet_name='Цены', index=False)
+        #     logger.success(f'Файл {file_name} сохранен!')
+        return prices
+            
+    def orders(self) -> pd.DataFrame:
+        orders = pd.DataFrame(APIRequests().get_orders())
+        # file_name = 'Заказы.xlsx'
+        # with pd.ExcelWriter(file_name) as writer:
+        #     orders.to_excel(writer, sheet_name='Заказы', index=False)
+        #     logger.success(f'Файл {file_name} сохранен!')   
+        return orders
     
-def main():
-    # Reports(TOKEN_KEY='КОСТРИК', supplier=53699).prices()
-    # Reports(TOKEN_KEY='КОСТРИК', supplier=53699).prices()
-    print(WebDriver().get_discount_settings())
-    print(WebDriver().get_wallet_discount_percent())
+    
+import uuid
+def main():    
+    
     
 if __name__ == '__main__':
     main()
