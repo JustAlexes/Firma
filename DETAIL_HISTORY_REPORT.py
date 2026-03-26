@@ -330,39 +330,39 @@ def UPDATE_DETAIL_HISTORY_REPORT(dates: list[str], TOKEN_NAME: str, file_name: s
             
             # === Вставка новых данных ===
             if new_day_stats['reportDate'] not in df_existing['reportDate'].values:
-                new_day_stats = [new_day_stats]
-                df_combined = pd.concat([df_existing, new_day_stats], ignore_index=True)
+                df_new_day_stats = pd.DataFrame([new_day_stats], index=None)
+                df_combined = pd.concat([df_existing, df_new_day_stats], ignore_index=True)
                 df_combined.to_excel(file_name, index=False, sheet_name='Статистика')
                 logger.success(f"Данные за {date} добавлены в файл {file_name}")
             
             # === Замена устаревших данных ===
-            if new_day_stats['reportDate'] in df_existing['reportDate'].values:
+            elif new_day_stats['reportDate'] in df_existing['reportDate'].values:
                 # === Выбираем фрейм с датой обрабатываемой на данный момент ===
                 df_updatableDate = df_existing[df_existing['reportDate'] == date]
                 # === Заменяем данные, если хотя бы какой-то из показателей увеличился ===
                 if (new_day_stats['ordersCount'] > df_updatableDate['ordersCount'].iloc[0] or 
                     new_day_stats['ordersSum'] > df_updatableDate['ordersSum'].iloc[0] or
                     new_day_stats['buyoutsCount'] > df_updatableDate['buyoutsCount'].iloc[0] or
-                    new_day_stats['ordersSbuyoutsSumum'] > df_updatableDate['buyoutsSum'].iloc[0] or
+                    new_day_stats['buyoutsSum'] > df_updatableDate['buyoutsSum'].iloc[0] or
                     new_day_stats['openCard'] > df_updatableDate['openCard'].iloc[0] or
                     new_day_stats['addToCart'] > df_updatableDate['addToCart'].iloc[0] or
                     new_day_stats['addToWishlist'] > df_updatableDate['addToWishlist'].iloc[0]):
                         
-
-                        # === Т.к Показы увеличиться не могут и по API не тянутся, обновлять их не будем ===
-                        showsCount = df_updatableDate['showsCount'].iloc[0]
-                        showToClickConversion = df_updatableDate['showToClickConversion'].iloc[0]
-                        if showsCount > 0 or showToClickConversion > 0:
-                            new_day_stats['showsCount'] = showsCount 
-                            new_day_stats['showToClickConversion'] = showToClickConversion
-                            
-                        df_new_day_stats = pd.DataFrame([new_day_stats], index=None)
-                        df_existing = df_existing[df_existing['reportDate'] != date]
-                        df_combined = pd.concat([df_existing, df_new_day_stats], ignore_index=True)
-                        df_combined.to_excel(file_name, index=False, sheet_name='Статистика')
+                    # === Т.к Показы увеличиться не могут и по API не тянутся, обновлять их не будем ===
+                    showsCount = df_updatableDate['showsCount'].iloc[0]
+                    showToClickConversion = df_updatableDate['showToClickConversion'].iloc[0]
+                    if showsCount > 0 or showToClickConversion > 0:
+                        new_day_stats['showsCount'] = showsCount 
+                        new_day_stats['showToClickConversion'] = showToClickConversion
+                        
+                    df_new_day_stats = pd.DataFrame([new_day_stats], index=None)
+                    df_existing = df_existing[df_existing['reportDate'] != date]
+                    df_combined = pd.concat([df_existing, df_new_day_stats], ignore_index=True)
+                    df_combined.to_excel(file_name, index=False, sheet_name='Статистика')
                          
-                logger.success(f"Данные за {date} в файле {file_name} обновлены")
-       
+                    logger.success(f"Данные за {date} в файле {file_name} успешно обновлены")
+                else:
+                    logger.success(f"Данные за {date} в файле {file_name} уже актуальны")
             else:
                 logger.critical(f'Неопознанная ошибка!!!')
                 
@@ -379,10 +379,12 @@ def UPDATE_DETAIL_HISTORY_REPORT(dates: list[str], TOKEN_NAME: str, file_name: s
 
 # В days передается кол-во дней для обновления отчета (в день максимум 20 запросов, рекомендуется - не более 15 дней)        
 file_name = 'Ежедневная статистика.xlsx'
-days = 15 
+days = 15
 # При помощи инструментов pandas собираем список дат 
 dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
 
+# for date in dates:
+#     print(date)
 UPDATE_DETAIL_HISTORY_REPORT(dates=dates, TOKEN_NAME='КОСТРИК', file_name=file_name)
 
 
