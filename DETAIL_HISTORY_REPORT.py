@@ -15,13 +15,13 @@ from loguru import logger
 from main import APIRequests
 
 ### ------------------------------------------------- ### 
-def GET_DAILY_DETAIL_HISTORY_REPORT_CSV(date: str, TOKEN_KEY: str, max_attempts: int = 5) -> pd.DataFrame:
+
+def GET_DAILY_DETAIL_HISTORY_REPORT_CSV(date: str, TOKEN_KEY: str, max_attempts: int = 5, DEF_WAIT: int = 5) -> pd.DataFrame:
     """
     Функция для получения данных из Воронки продаж
     """
-    logger.info(f'Получение статистики из Воронки продаж за {date}')
-    
-    # === Определяем параметры первого запроса для формирования Воронки продаж ===
+        
+    # === Определяем параметры первого запроса ===
     HEADERS = {'Authorization': TOKEN_KEY}
     url = 'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads'
     report_date =  str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
@@ -37,50 +37,77 @@ def GET_DAILY_DETAIL_HISTORY_REPORT_CSV(date: str, TOKEN_KEY: str, max_attempts:
         'reportType': reportType,
         'params': params
     }
-    
     # === Первый запрос для формирования Воронки продаж ===
-    response = requests.post(url=url, headers=HEADERS, json=body)
-    if response.status_code != 200:
-        logger.error(f'Ошибка запроса на формирование отчета за {date} | {response.status_code} | {response.text}')
-        return None
-    logger.info(f'Формирование отчета за {date}')
-    
-    # === Второй запрос для проверки окончания формирования Воронки продаж ===
+    logger.info(f'Получение статистики из Воронки продаж за {date}')
+    for attempt in range(max_attempts):
+        response = requests.post(url=url, headers=HEADERS, json=body)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 429 or STATUS_CODE in [504]:
+            TIME_WAIT = DEF_WAIT * (attempt + 1)
+            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {TIME_WAIT} сек.')
+            time.sleep(TIME_WAIT)
+        elif STATUS_CODE != 200:
+            logger.error(f'Ошибка запроса на формирование отчета за {date} | {STATUS_CODE} | {response.text}')
+            return None
+        else:
+            logger.info(f'Началось формирование отчета за {date}')
+            time.sleep(DEF_WAIT)
+            break
+        
+    # === Определяем параметры второго запроса ===
     url = 'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads'
     body = {
         'filter[downloadIds]': [new_uuid]
     }
-    
-    # === Т.к отчету нужно время чтобы сформироваться, делаем ожидание ===
+    # === Второй запрос для проверки окончания формирования Воронки продаж ===
+    logger.info(f'Проверка готовности отчета за {date}')
     for attempt in range(max_attempts):
         response = requests.get(url=url, headers=HEADERS, params=body)
-        if response.json().get('data')[0].get('status') != 'SUCCESS':
-            if attempt == max_attempts - 1:
-                return None
-            logger.info('Ожидание формирования отчета...')
-            time.sleep(5 * (attempt+1))
-            
-        else:
+        STATUS_CODE = response.status_code
+        
+        if response.json().get('data')[0].get('status') == 'SUCCESS':
             logger.success(f'Отчет за {date} готов!')    
             break
+        elif STATUS_CODE == 429: 
+            if attempt == max_attempts - 1:
+                logger.error(f'Ошибка проверки готовности отчета! | {STATUS_CODE} | {response.text}')
+                return None
+            TIME_WAIT = DEF_WAIT * (attempt + 1)
+            logger.warning(f'Ошибка {STATUS_CODE} | Ожидание формирования отчета {TIME_WAIT} сек.')
+            time.sleep(TIME_WAIT) 
+        else:
+            logger.error(f'Ошибка проверки готовности отчета! | {STATUS_CODE} | {response.text}')
+            return None
         
-    # === Третий запрос для получения отчета Воронки продаж ===
-    logger.info(f'Получение отчета за {date}')         
+    
+    # === Определяем параметры третьего запроса ===
     url = f'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads/file/{new_uuid}'
-    response = requests.get(url=url, headers=HEADERS)
-    
-    if response.status_code != 200:
-        logger.error(f'Ошибка получения отчета {response.status_code} | {response.text}')
-        return None
-    logger.success(f'Отчет за {date} получен!')
-    
+    # === Третий запрос для получения отчета Воронки продаж ===    
+    logger.info(f'Получение отчета за {date}')     
+    for attempt in range(max_attempts):
+        response = requests.get(url=url, headers=HEADERS)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 200:
+            logger.success(f'Отчет за {date} получен!')
+            break
+        elif STATUS_CODE == 429:
+            TIME_WAIT = DEF_WAIT * (attempt + 1)
+            logger.warning(f'Ошибка получения отчета {STATUS_CODE} | Ожидание {TIME_WAIT} сек.')
+            time.sleep(TIME_WAIT)
+        else:
+            logger.error(f'Ошибка получения отчета {STATUS_CODE} | {response.text}')
+            return None
     # === Запрос отдает ZIP файл в котором лежит csv с названием в виде (new_uuid.csv) в побитовом формате ===
     with zipfile.ZipFile(io.BytesIO(response.content), 'r') as zip_file:
         df_day_stats = pd.read_csv(io.StringIO(zip_file.read(f'{new_uuid}.csv').decode('utf-8')), index_col=None)
-        logger.info(f'Показатели за {date} выгружены')        
-        return df_day_stats
+        if not df_day_stats.empty:
+            logger.info(f'Показатели за {date} выгружены')        
+            return df_day_stats
+        else:
+            return None
    
 ### ------------------------------------------------- ###  
+
 def CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df: pd.DataFrame):
     """
     Функция расчета данных по дням из Воронки продаж
@@ -120,7 +147,8 @@ def CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df: pd.DataFrame):
     }
     return daily_stats
  
-### ------------------------------------------------- ###            
+### ------------------------------------------------- ### 
+           
 def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
     """
     Функция для форматирования отчета Воронки продаж
@@ -312,7 +340,8 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
     except Exception as e:
         logger.error(f'Произошла ошибка на одном из этапов форматирования файла {file}! | {e}')              
                 
-### ------------------------------------------------- ###            
+### ------------------------------------------------- ###      
+      
 def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, file_name: str):
     """
     Функция для ежедневного обновления отчета Воронки продаж
@@ -401,8 +430,9 @@ def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, fi
     except Exception as e:
         logger.error(f'Возникла ошибка на одном из этапов обновления данных | {e}')    
 
-### ------------------------------------------------- ###            
-def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5) -> pd.DataFrame:
+### ------------------------------------------------- ### 
+           
+def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5) -> list:
     """
     Функция получения данных из Воронки продаж
     """
@@ -427,19 +457,19 @@ def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: in
     for attempt in range(max_attempts):
         response = requests.post(url=url, headers=HEADERS, json=params)
         STATUS_CODE = response.status_code
-        if STATUS_CODE == 429:
+        if STATUS_CODE == 200:
+            products = response.json().get('data').get('products')
+            logger.debug(f'Данные из Воронки продаж за {date} получены')
+            break   
+        elif STATUS_CODE == 429:
             if attempt == max_attempts - 1:
                 logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
                 return None
             logger.info(f'{STATUS_CODE} | {response.text} | Ожидание {5*(attempt+1)}сек.')
             time.sleep(5 * (attempt+1))
-        elif response.status_code in [400, 401, 402, 403]:
-            logger.error(f'{response.status_code} | {response.text}')
-            return None
         else:
-            logger.debug(f'Данные из Воронки продаж за {date} получены')
-            break   
-    products = response.json().get('data').get('products')
+            logger.error(f'{STATUS_CODE} | {response.text}')
+            return None
 
     detail_history = []
     for product in products:
@@ -454,22 +484,22 @@ def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: in
         detail_history_product['buyoutCount'] = product.get('statistic').get('selected').get('buyoutCount')
         detail_history_product['buyoutSum'] = product.get('statistic').get('selected').get('buyoutSum')
         detail_history.append(detail_history_product)
-        
-    if not detail_history:
+    
+    if detail_history:
+        logger.success(f'Данные из Воронки продаж за {date} обработаны!')
+        return detail_history
+    else:
         logger.error(f'Возникла ошибка при обработке данных за {date}')
         return None
-    logger.success(f'Данные из Воронки продаж за {date} обработаны!')
-    return detail_history
-       
-# pd.DataFrame(GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME='КОСТРИК', date='01.04.2026'), index=None).to_excel('Воронка.xlsx', index=False)
+         
+### ------------------------------------------------- ###
 
-### ------------------------------------------------- ### 
 def GET_REALIZATION_DETAIL_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5) -> list:    
     """
     Функция для получения отчета о реализации \n
     date в формате dd.mm.yyyy
     """
-    logger.success(f'Получение отчета о реализации за {date}')
+    logger.debug(f'Получение отчета о реализации за {date}')
     
     load_dotenv()
     TOKEN_KEY = os.getenv(TOKEN_NAME)
@@ -565,17 +595,257 @@ def GET_REALIZATION_DETAIL_REPORT(TOKEN_NAME: str, date: str, max_attempts: int 
         
     return realization_detail_report
     
-# print(GET_REALIZATION_DETAIL_REPORT(TOKEN_NAME='КОСТРИК', date='01.04.2026'))
-# pd.DataFrame(GET_REALIZATION_DETAIL_REPORT(TOKEN_NAME='КОСТРИК', date='01.04.2026'), index=None).to_excel('Реализация.xlsx', index=False)
+### ------------------------------------------------- ### 
+
+def PROCESS_REALIZATION_DETAIL_REPORT(report: list):
+    pass
+    
+### ------------------------------------------------- ### 
+
+def GET_PAID_STORAGE(TOKEN_NAME: str, date: str, max_attempts: int = 5, DEF_WAIT: int = 5) -> list:
+    """
+    Функция для получения отчета о платном хранении \n
+    date в формате dd.mm.yyyy
+    """
+    logger.debug(f'Получение отчета о платном хранении за {date}')
+    
+    load_dotenv()
+    TOKEN_KEY = os.getenv(TOKEN_NAME)
+    HEADERS = {'Authorization': TOKEN_KEY}
+    
+    url = 'https://seller-analytics-api.wildberries.ru/api/v1/paid_storage'
+    
+    dateFromTo = str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
+    params = {
+        'dateFrom': dateFromTo,
+        'dateTo': dateFromTo,
+    }
+    
+    logger.info(f'Создание задания на формирование отчета о платном хранении за {date}')
+    for attempt in range(max_attempts):
+        response = requests.get(url=url, headers=HEADERS, params=params)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 429:
+            WAIT_TIME = 5 * (attempt + 1)
+            if attempt == (max_attempts - 1):
+                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                return None
+            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {WAIT_TIME} секунд.')
+            time.sleep(WAIT_TIME)
+        elif STATUS_CODE != 200:
+            logger.error(f'Ошибка {STATUS_CODE} | {response.text}')
+            return None
+        else:
+            taskId = response.json().get('data').get('taskId')
+            logger.debug(f'Задание на генерацию отчета о платном хранении за {date} создано!')
+            break
+        
+    url = f'https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{taskId}/status'
+
+    time.sleep(DEF_WAIT)
+    logger.info(f'Проверка статуса отчета о платном хранении за {date}')
+    for attempt in range(max_attempts):
+        response = requests.get(url=url, headers=HEADERS)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 200:
+            status = response.json().get('data').get('status')
+            if status == 'done':
+                break
+            elif status == 'new' or status == 'processing':
+                WAIT_TIME = DEF_WAIT * (attempt + 1)
+                logger.warning(f'Отчет формируется, ожидание {WAIT_TIME} сек.')
+                time.sleep(WAIT_TIME)
+                continue
+            else:
+                logger.error(f'Статус отчета {status}, попробуйте повторить позже')
+                return None
+        elif STATUS_CODE == 429:
+            WAIT_TIME = DEF_WAIT * (attempt + 1)
+            if attempt == (max_attempts - 1):
+                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                return None
+            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {WAIT_TIME} секунд.')
+            time.sleep(WAIT_TIME)
+        else:
+            logger.error(f'Ошибка {STATUS_CODE} | {response.text}')
+            return None
+        
+    url = f'https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{taskId}/download'
+
+    logger.info(f'Получение отчета о платном хранении за {date}')
+    for attempt in range(max_attempts):
+        response = requests.get(url=url, headers=HEADERS)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 200:
+            data = response.json()
+            logger.debug(f'Отчет о платном хранении за {date} получен!')
+            break
+        elif STATUS_CODE == 429:
+            WAIT_TIME = DEF_WAIT * (attempt + 1)
+            if attempt == (max_attempts - 1):
+                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                return None
+            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {WAIT_TIME} секунд.')
+            time.sleep(WAIT_TIME)
+        else:
+            logger.error(f'Ошибка {STATUS_CODE} | {response.text}')
+            return None
+        
+    if data:
+        logger.info(f'Обработка отчета о платном хранении за {date}')
+        paid_storage_df = pd.DataFrame(data, index=None)
+        paid_storage_df = (paid_storage_df.groupby(['vendorCode', 'nmId'])['warehousePrice'].sum()).reset_index()
+        paid_storage = paid_storage_df.to_dict(orient='records')
+        logger.success(f'Отчет о платном хранении за {date} готов!')
+        return paid_storage
+    else:
+        logger.error(f'Ошибка получения отчета о платном хранении за {date}!')
+        return None
+    
+### ------------------------------------------------- ### 
+
+def GET_COST_PRICE(file_path: str = 'required_files/Себестоимости.xlsx') -> list:
+    """
+    Функция получения себестоимостей из файла Excel
+    """
+    logger.info(f'Получение себестоимостей')
+    try:
+        cost_price_df = pd.read_excel(file_path, index_col= None)
+        cost_price_df = cost_price_df.rename(columns={
+            'Код': 'vendorCode',
+            'Наименование': 'title',
+            'Себестоимость': 'costPrice',
+        })
+        cost_price = cost_price_df.to_dict(orient='records')
+        logger.success('Себестоимости успешно получены!')
+        return cost_price
+    except:
+        logger.error('Возникла проблема получения себестоимостей товаров!')
+        return None
 
 ### ------------------------------------------------- ### 
 
+def GET_ADVERTS_LIST(TOKEN_NAME: str, max_attempts: int = 5, DEF_WAIT = 5) -> list:
+    """
+    Функция возвращает список созданных в кабинете РК
+    """
+    logger.debug(f'Получение списка рекламных кампаний')
+    
+    load_dotenv()
+    TOKEN_KEY = os.getenv(TOKEN_NAME)
+    HEADERS = {'Authorization': TOKEN_KEY}
+    
+    url = 'https://advert-api.wildberries.ru/adv/v1/promotion/count'
+    
+    for attempt in range(max_attempts):
+        response = requests.get(url=url, headers=HEADERS)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 429:
+            WAIT_TIME = 5 * (attempt + 1)
+            if attempt == (max_attempts - 1):
+                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                return None
+            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {WAIT_TIME} секунд.')
+            time.sleep(WAIT_TIME)
+        elif STATUS_CODE != 200:
+            logger.error(f'Ошибка {STATUS_CODE} | {response.text}')
+            return None
+        else:
+            advert_list = response.json().get('adverts')
+            advertsIDs = [advert.get('advertId', None) for group in advert_list for advert in group.get('advert_list', [])]
+            logger.debug(f'Список РК получен!')
+            return advertsIDs
 
+### ------------------------------------------------- ###
 
-# TODO
-# # В days передается кол-во дней для обновления отчета (в день максимум 20 запросов, рекомендуется - не более 15 дней)        
-# file_name = 'Ежедневная статистика.xlsx'
-# days = 16
-# # При помощи инструментов pandas собираем список дат 
-# dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
-# UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates=dates, TOKEN_NAME='КОСТРИК', file_name=file_name)
+def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_attempts: int = 5, DEF_WAIT = 5) -> list:
+    """
+    Функция возвращает статистику всех РК в кабинете
+    """
+    logger.debug(f'Получение статистики рекламных кампаний')
+    
+    load_dotenv()
+    TOKEN_KEY = os.getenv(TOKEN_NAME)
+    HEADERS = {'Authorization': TOKEN_KEY}
+    dateFromTo = str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
+    
+    url = 'https://advert-api.wildberries.ru/adv/v3/fullstats'
+    
+    chunk_size = 50
+    advertsIDs_chunks = [adverts[i:i + chunk_size] for i in range(0, len(adverts), chunk_size)]
+    adverts_full_stat = []
+    for adverts_chunk in advertsIDs_chunks:
+        adverts_chunk_str = ','.join(map(str, adverts_chunk)) 
+        params = {
+            'ids': adverts_chunk_str,
+            'beginDate': dateFromTo,
+            'endDate': dateFromTo
+        }
+        for attempt in range(max_attempts):
+            response = requests.get(url=url, headers=HEADERS, params=params)
+            STATUS_CODE = response.status_code
+            if STATUS_CODE == 429:
+                WAIT_TIME = 5 * (attempt + 1)
+                if attempt == (max_attempts - 1):
+                    logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                    return None
+                logger.warning(f'Ошибка {STATUS_CODE}, ожидание {WAIT_TIME} секунд.')
+                time.sleep(WAIT_TIME)
+            elif STATUS_CODE != 200:
+                logger.error(f'Ошибка {STATUS_CODE} | {response.text}')
+                return None
+            else:
+                if response.json() is not None:
+                    adverts_full_stat += response.json()
+                    logger.debug(f'Статистика части РК за {date} добавлена')
+                else:
+                    logger.debug(f'Статистика части РК за {date} отсутствует')
+                break
+            
+        if adverts_chunk != advertsIDs_chunks[-1]:
+            logger.info(f'Ожидание 20 сек. для предотвращения ошибки 429')
+            time.sleep(20)
+            
+    if adverts_full_stat:
+        logger.success(f'Полная статистика РК за {date} получена')
+        full_stats = []
+        for advertId in adverts_full_stat:
+            for day in advertId.get('days'):
+                for app in day.get('apps'):
+                    for nm in app.get('nms'):
+                        nm_stats = {}
+                        nm_stats['nmId'] = nm.get('nmId')
+                        nm_stats['sum'] = nm.get('sum')
+                        nm_stats['atbs'] = nm.get('atbs')
+                        nm_stats['canceled'] = nm.get('canceled')
+                        nm_stats['clicks'] = nm.get('clicks')
+                        nm_stats['orders'] = nm.get('orders')
+                        nm_stats['views'] = nm.get('views')
+                        nm_stats['ordersSum'] = nm.get('sum_price')
+                        full_stats.append(nm_stats)
+        full_stats_df = pd.DataFrame(full_stats, index=None)
+        full_stats_df = full_stats_df.groupby('nmId').agg(
+            sum = ('sum', 'sum'),
+            atbs = ('atbs', 'sum'),
+            canceled = ('canceled', 'sum'),
+            clicks = ('clicks', 'sum'),
+            orders = ('orders', 'sum'),
+            views = ('views', 'sum'),
+            sum_price = ('ordersSum', 'sum'),
+        ).reset_index()
+        full_stats_df['orders'] = full_stats_df['orders'] - full_stats_df['canceled']
+        full_stats_df = full_stats_df.drop(columns=['canceled'])
+        adverts_stats = full_stats_df.to_dict(orient='records')
+        return adverts_stats
+    else:
+        logger.success(f'Ошибка получения рекламной статистики за {date}')
+        return None
+            
+### ------------------------------------------------- ### 
+
+# В days передается кол-во дней для обновления отчета (в день максимум 20 запросов, рекомендуется - не более 15 дней)        
+file_name = 'Ежедневная статистика.xlsx'
+days = 15
+# При помощи инструментов pandas собираем список дат 
+dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
+UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates=dates, TOKEN_NAME='КОСТРИК', file_name=file_name)

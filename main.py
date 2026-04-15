@@ -81,10 +81,10 @@ class APIRequests:
                             for item in items:
                                 card = {}
                                 card['brand'] = item.get('brand')
-                                card['category'] = item.get('subjectName')
+                                card['subjectName'] = item.get('subjectName')
                                 card['nmID'] = item.get('nmID')
-                                card['article'] = item.get('vendorCode')
-                                card['name'] = item.get('title')
+                                card['vendorCode'] = item.get('vendorCode')
+                                card['title'] = item.get('title')
                                 card['skus'] = []
                                 for size in item.get('sizes', []):
                                     for sku in size.get('skus', []):
