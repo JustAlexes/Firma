@@ -14,114 +14,95 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from loguru import logger
 from main import APIRequests
 
-### ------------------------------------------------- ### 
 
-def GET_DAILY_DETAIL_HISTORY_REPORT_CSV(date: str, TOKEN_KEY: str, max_attempts: int = 5, DEF_WAIT: int = 5) -> pd.DataFrame:
-    """
-    Функция для получения данных из Воронки продаж
-    """
-        
-    # === Определяем параметры первого запроса ===
-    HEADERS = {'Authorization': TOKEN_KEY}
-    url = 'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads'
-    report_date =  str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
-    new_uuid = str(uuid.uuid4()) # Храним уникальный id отчета
-    reportType = 'DETAIL_HISTORY_REPORT'
-    params = {
-        'startDate': report_date,
-        'endDate': report_date,
-        'skipDeletedNm': False
-    }
-    body = {
-        'id': new_uuid,
-        'reportType': reportType,
-        'params': params
-    }
-    # === Первый запрос для формирования Воронки продаж ===
-    logger.info(f'Получение статистики из Воронки продаж за {date}')
-    for attempt in range(max_attempts):
-        response = requests.post(url=url, headers=HEADERS, json=body)
-        STATUS_CODE = response.status_code
-        if STATUS_CODE == 429 or STATUS_CODE in [504]:
-            TIME_WAIT = DEF_WAIT * (attempt + 1)
-            logger.warning(f'Ошибка {STATUS_CODE}, ожидание {TIME_WAIT} сек.')
-            time.sleep(TIME_WAIT)
-        elif STATUS_CODE != 200:
-            logger.error(f'Ошибка запроса на формирование отчета за {date} | {STATUS_CODE} | {response.text}')
-            return None
-        else:
-            logger.info(f'Началось формирование отчета за {date}')
-            time.sleep(DEF_WAIT)
-            break
-        
-    # === Определяем параметры второго запроса ===
-    url = 'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads'
-    body = {
-        'filter[downloadIds]': [new_uuid]
-    }
-    # === Второй запрос для проверки окончания формирования Воронки продаж ===
-    logger.info(f'Проверка готовности отчета за {date}')
-    for attempt in range(max_attempts):
-        response = requests.get(url=url, headers=HEADERS, params=body)
-        STATUS_CODE = response.status_code
-        
-        if response.json().get('data')[0].get('status') == 'SUCCESS':
-            logger.success(f'Отчет за {date} готов!')    
-            break
-        elif STATUS_CODE == 429: 
-            if attempt == max_attempts - 1:
-                logger.error(f'Ошибка проверки готовности отчета! | {STATUS_CODE} | {response.text}')
-                return None
-            TIME_WAIT = DEF_WAIT * (attempt + 1)
-            logger.warning(f'Ошибка {STATUS_CODE} | Ожидание формирования отчета {TIME_WAIT} сек.')
-            time.sleep(TIME_WAIT) 
-        else:
-            logger.error(f'Ошибка проверки готовности отчета! | {STATUS_CODE} | {response.text}')
-            return None
-        
-    
-    # === Определяем параметры третьего запроса ===
-    url = f'https://seller-analytics-api.wildberries.ru/api/v2/nm-report/downloads/file/{new_uuid}'
-    # === Третий запрос для получения отчета Воронки продаж ===    
-    logger.info(f'Получение отчета за {date}')     
-    for attempt in range(max_attempts):
-        response = requests.get(url=url, headers=HEADERS)
-        STATUS_CODE = response.status_code
-        if STATUS_CODE == 200:
-            logger.success(f'Отчет за {date} получен!')
-            break
-        elif STATUS_CODE == 429:
-            TIME_WAIT = DEF_WAIT * (attempt + 1)
-            logger.warning(f'Ошибка получения отчета {STATUS_CODE} | Ожидание {TIME_WAIT} сек.')
-            time.sleep(TIME_WAIT)
-        else:
-            logger.error(f'Ошибка получения отчета {STATUS_CODE} | {response.text}')
-            return None
-    # === Запрос отдает ZIP файл в котором лежит csv с названием в виде (new_uuid.csv) в побитовом формате ===
-    with zipfile.ZipFile(io.BytesIO(response.content), 'r') as zip_file:
-        df_day_stats = pd.read_csv(io.StringIO(zip_file.read(f'{new_uuid}.csv').decode('utf-8')), index_col=None)
-        if not df_day_stats.empty:
-            logger.info(f'Показатели за {date} выгружены')        
-            return df_day_stats
-        else:
-            return None
-   
 ### ------------------------------------------------- ###  
 
-def CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df: pd.DataFrame):
+def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5, DEF_WAIT: int = 15) -> list:
+    """
+    Функция получения данных из Воронки продаж
+    """
+    load_dotenv()
+    TOKEN_KEY = os.getenv(TOKEN_NAME)
+    HEADERS = {'Authorization': TOKEN_KEY}
+    url = 'https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products'
+    dateStartEnd = str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
+    params = {
+        'selectedPeriod': {
+            'start': dateStartEnd,
+            'end': dateStartEnd
+        },
+        'skipDeletedNm': False,
+        'orderBy': {
+            'field': 'openCard',
+            'mode': 'desc'
+        },
+        'limit': 1000
+    }
+    for attempt in range(max_attempts):
+        logger.info(f'Получение статистики из Воронки продаж за {date} | попытка {attempt+1}/{max_attempts}')
+        response = requests.post(url=url, headers=HEADERS, json=params)
+        STATUS_CODE = response.status_code
+        if STATUS_CODE == 200:
+            products = response.json().get('data').get('products')
+            logger.debug(f'Данные из Воронки продаж за {date} получены')
+            break   
+        elif STATUS_CODE == 429:
+            if attempt == max_attempts - 1:
+                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
+                return None
+            else:
+                TIME_SLEEP = DEF_WAIT * (attempt+1)
+                logger.info(f'{STATUS_CODE} | {response.text} | Ожидание {TIME_SLEEP}сек.')
+                time.sleep(TIME_SLEEP)
+        else:
+            logger.error(f'{STATUS_CODE} | {response.text}')
+            return None
+
+    detail_history = []
+    for product in products:
+        detail_history_product = {}
+        detail_history_product['date'] = datetime.strptime(dateStartEnd, '%Y-%m-%d').strftime('%d.%m.%Y')
+        detail_history_product['nmId'] = product.get('product').get('nmId')
+        detail_history_product['title'] = product.get('product').get('title')
+        detail_history_product['vendorCode'] = product.get('product').get('vendorCode')
+        detail_history_product['openCount'] = product.get('statistic').get('selected').get('openCount')
+        detail_history_product['cartCount'] = product.get('statistic').get('selected').get('cartCount')
+        detail_history_product['orderCount'] = product.get('statistic').get('selected').get('orderCount') - product.get('statistic').get('selected').get('cancelCount')
+        detail_history_product['orderSum'] = product.get('statistic').get('selected').get('orderSum') - product.get('statistic').get('selected').get('cancelSum')
+        detail_history_product['buyoutCount'] = product.get('statistic').get('selected').get('buyoutCount')
+        detail_history_product['buyoutSum'] = product.get('statistic').get('selected').get('buyoutSum')
+        detail_history_product['addToCartConversion'] = detail_history_product['cartCount'] * 100 / detail_history_product['openCount'] if detail_history_product['openCount'] > 0 else 0
+        detail_history_product['cartToOrderConversion'] = detail_history_product['orderCount'] * 100 / detail_history_product['cartCount'] if detail_history_product['cartCount'] > 0 else 0
+        detail_history_product['buyoutPercent'] = detail_history_product['buyoutCount'] * 100 / detail_history_product['orderCount'] if detail_history_product['orderCount'] > 0 else 0
+        detail_history_product['addToWishlist'] = product.get('statistic').get('selected').get('addToWishlist')
+        
+        detail_history.append(detail_history_product)
+    
+    if detail_history:
+        logger.success(f'Данные из Воронки продаж за {date} обработаны!')
+        return detail_history
+    else:
+        logger.error(f'Возникла ошибка при обработке данных за {date}')
+        return None
+    
+### ------------------------------------------------- ###  
+
+def CALCULATE_DAILY_DETAIL_HISTORY_REPORT(detail_history: list) -> dict:
     """
     Функция расчета данных по дням из Воронки продаж
     """
+    df = pd.DataFrame(detail_history, index=None)
+    
     # === Рассчитываем все необходимые показатели ===
-    updateDate = (datetime.now() - relativedelta(hours=3)).strftime('%d.%m.%Y %H:%M')
-    reportDate = datetime.strptime(df['dt'].iloc[0], '%Y-%m-%d').strftime('%d.%m.%Y')
-    ordersCount = df['ordersCount'].sum() - df['cancelCount'].sum()   
-    ordersSum = df['ordersSumRub'].sum() - df['cancelSumRub'].sum()  
-    buyoutsCount = df['buyoutsCount'].sum()
-    buyoutsSum = df['buyoutsSumRub'].sum()
+    updateDate = datetime.now().strftime('%d.%m.%Y %H:%M')
+    reportDate = df['date'].iloc[0]
+    orderCount = df['orderCount'].sum()   
+    orderSum = df['orderSum'].sum()
+    buyoutCount = df['buyoutCount'].sum()
+    buyoutSum = df['buyoutSum'].sum()
     showsCount = 0 # Placeholder (Нельзя получить по API)
-    openCard = df['openCardCount'].sum()
-    addToCart = df['addToCartCount'].sum()
+    openCard = df['openCount'].sum()
+    addToCart = df['cartCount'].sum()
     showToClickConversion = 0 # Placeholder (Нельзя посчитать без показов)
     addToCartConversion = (df.loc[df['addToCartConversion'] > 0, 'addToCartConversion'].mean()) / 100
     cartToOrderConversion = (df.loc[df['cartToOrderConversion'] > 0, 'cartToOrderConversion'].mean()) / 100
@@ -129,13 +110,13 @@ def CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df: pd.DataFrame):
     addToWishlist = df['addToWishlist'].sum()
     
     # === Собираем показатели в необходимые поля ===
-    daily_stats = {
+    day_stats = {
         'updateDate': updateDate,
         'reportDate': reportDate,
-        'ordersCount': ordersCount,
-        'ordersSum': ordersSum,
-        'buyoutsCount': buyoutsCount,
-        'buyoutsSum': buyoutsSum,
+        'orderCount': orderCount,
+        'orderSum': orderSum,
+        'buyoutCount': buyoutCount,
+        'buyoutSum': buyoutSum,
         'showsCount': showsCount,
         'openCard': openCard,
         'addToCart': addToCart,
@@ -145,11 +126,11 @@ def CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df: pd.DataFrame):
         'buyoutPercent': buyoutPercent,
         'addToWishlist': addToWishlist
     }
-    return daily_stats
+    return day_stats
  
 ### ------------------------------------------------- ### 
            
-def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
+def FORMAT_DAILY_DETAIL_HISTORY_REPORT(file: str = 'Ежедневная статистика.xlsx') -> bool | None:
     """
     Функция для форматирования отчета Воронки продаж
     """
@@ -158,10 +139,9 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
     file_path = Path(file)
     if not file_path.exists():
         logger.error(f'Файл {file} не найден!')
-        return None
-    logger.info(f'Форматирование файла {file}')
-    
+        return None    
     try:
+        logger.info(f'Форматирование файла {file}')
         # === Открываем файл ===
         df = pd.read_excel(file_path)
         
@@ -173,10 +153,10 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
         header_cols = {
         'Обновлено': 'updateDate',
         'Дата': 'reportDate',
-        'Заказано, шт.': 'ordersCount',
-        'Заказано, руб.': 'ordersSum',
-        'Выкуплено, шт.': 'buyoutsCount',
-        'Выкуплено, руб.': 'buyoutsSum',
+        'Заказано, шт.': 'orderCount',
+        'Заказано, руб.': 'orderSum',
+        'Выкуплено, шт.': 'buyoutCount',
+        'Выкуплено, руб.': 'buyoutSum',
         'Показов': 'showsCount',
         'Переходов в карточки': 'openCard',
         'Добавлений в корзину': 'addToCart',
@@ -196,10 +176,10 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
         
         # === Преобразование данных к числам ===
         numeric_cols = {
-            'ordersCount': int,
-            'ordersSum': int,
-            'buyoutsCount': int,
-            'buyoutsSum': int,
+            'orderCount': int,
+            'orderSum': int,
+            'buyoutCount': int,
+            'buyoutSum': int,
             'showsCount': int,
             'openCard': int,
             'addToCart': int,
@@ -221,10 +201,10 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
         header_cols = {
             'updateDate': 'Обновлено',
             'reportDate': 'Дата',
-            'ordersCount': 'Заказано, шт.',
-            'ordersSum': 'Заказано, руб.',
-            'buyoutsCount': 'Выкуплено, шт.',
-            'buyoutsSum': 'Выкуплено, руб.',
+            'orderCount': 'Заказано, шт.',
+            'orderSum': 'Заказано, руб.',
+            'buyoutCount': 'Выкуплено, шт.',
+            'buyoutSum': 'Выкуплено, руб.',
             'showsCount': 'Показов',
             'openCard': 'Переходов в карточки',
             'addToCart': 'Добавлений в корзину',
@@ -262,7 +242,7 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
         
         # === Автоширина столбцов ===
         for i, col in enumerate(df.columns):
-            max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 2
+            max_len = max(df[col].fillna(0).astype(str).map(len).max(), len(str(col))) + 2
             worksheet.set_column(i, i, min(max_len, 32))
         logger.info(f'Изменена ширина столбцов')
         
@@ -342,22 +322,15 @@ def FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file: str) -> bool | None:
                 
 ### ------------------------------------------------- ###      
       
-def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, file_name: str):
+def UPDATE_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, dates: list[str], file_name: str = 'Ежедневная статистика.xlsx'):
     """
     Функция для ежедневного обновления отчета Воронки продаж
     """
-    # === Инициализируем токен ===
+
     try:
-        load_dotenv()
-        TOKEN_KEY = os.getenv(TOKEN_NAME)
-        if TOKEN_KEY == None:
-            logger.error('Ошибка инициализации токена!')
-            return None
-        logger.info('Токен инициализирован!')
-        
         for date in dates:
-            new_daily_stats = GET_DAILY_DETAIL_HISTORY_REPORT_CSV(date, TOKEN_KEY)
-            new_daily_stats = CALCULATE_DAILY_DETAIL_HISTORY_REPORT_CSV(df=new_daily_stats)
+            new_daily_stats = GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME, date)
+            new_daily_stats = CALCULATE_DAILY_DETAIL_HISTORY_REPORT(detail_history=new_daily_stats)
                     
             # === Получение сохраненных данных ===
             df_existing = pd.read_excel(file_name)
@@ -366,10 +339,10 @@ def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, fi
             header_cols = {
             'Обновлено': 'updateDate',
             'Дата': 'reportDate',
-            'Заказано, шт.': 'ordersCount',
-            'Заказано, руб.': 'ordersSum',
-            'Выкуплено, шт.': 'buyoutsCount',
-            'Выкуплено, руб.': 'buyoutsSum',
+            'Заказано, шт.': 'orderCount',
+            'Заказано, руб.': 'orderSum',
+            'Выкуплено, шт.': 'buyoutCount',
+            'Выкуплено, руб.': 'buyoutSum',
             'Показов': 'showsCount',
             'Переходов в карточки': 'openCard',
             'Добавлений в корзину': 'addToCart',
@@ -393,10 +366,10 @@ def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, fi
                 # === Выбираем фрейм с датой обрабатываемой на данный момент ===
                 df_updatableDate = df_existing[df_existing['reportDate'] == date]
                 # === Заменяем данные, если хотя бы какой-то из показателей увеличился ===
-                if (new_daily_stats['ordersCount'] != df_updatableDate['ordersCount'].iloc[0] or 
-                    new_daily_stats['ordersSum'] != df_updatableDate['ordersSum'].iloc[0] or
-                    new_daily_stats['buyoutsCount'] != df_updatableDate['buyoutsCount'].iloc[0] or
-                    new_daily_stats['buyoutsSum'] != df_updatableDate['buyoutsSum'].iloc[0] or
+                if (new_daily_stats['orderCount'] != df_updatableDate['orderCount'].iloc[0] or 
+                    new_daily_stats['orderSum'] != df_updatableDate['orderSum'].iloc[0] or
+                    new_daily_stats['buyoutCount'] != df_updatableDate['buyoutCount'].iloc[0] or
+                    new_daily_stats['buyoutSum'] != df_updatableDate['buyoutSum'].iloc[0] or
                     new_daily_stats['openCard'] != df_updatableDate['openCard'].iloc[0] or
                     new_daily_stats['addToCart'] != df_updatableDate['addToCart'].iloc[0] or
                     new_daily_stats['addToWishlist'] != df_updatableDate['addToWishlist'].iloc[0]):
@@ -412,7 +385,7 @@ def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, fi
                     df_existing = df_existing[df_existing['reportDate'] != date]
                     df_combined = pd.concat([df_existing, df_new_day_stats], ignore_index=True)
                     df_combined.to_excel(file_name, index=False, sheet_name='Статистика')
-                         
+                        
                     logger.success(f"Данные за {date} в файле {file_name} успешно обновлены")
                 else:
                     logger.success(f"Данные за {date} в файле {file_name} уже актуальны")
@@ -420,78 +393,16 @@ def UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates: list[str], TOKEN_NAME: str, fi
                 logger.critical(f'Неопознанная ошибка!!!')
                 
             if date != dates[-1]:
-                logger.info(f'Ожидание 30 секунд для предотвращения ошибки 429...')
-                time.sleep(30)
+                logger.info(f'Ожидание 20 секунд для предотвращения ошибки 429...')
+                time.sleep(20)
         
-        if(FORMAT_DAILY_DETAIL_HISTORY_REPORT_CSV(file=file_name)):
+        if(FORMAT_DAILY_DETAIL_HISTORY_REPORT()):
             logger.success(f'Форматированние данных при обновлении периода {dates[0]} - {dates[-1]} прошло успешно')
         logger.success(f'Данные за период {dates[0]} - {dates[-1]} успешно обновлены')
     
     except Exception as e:
         logger.error(f'Возникла ошибка на одном из этапов обновления данных | {e}')    
 
-### ------------------------------------------------- ### 
-           
-def GET_DAILY_DETAIL_HISTORY_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5) -> list:
-    """
-    Функция получения данных из Воронки продаж
-    """
-    logger.info(f'Получение статистики из Воронки продаж за {date}')
-    load_dotenv()
-    TOKEN_KEY = os.getenv(TOKEN_NAME)
-    HEADERS = {'Authorization': TOKEN_KEY}
-    url = 'https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products'
-    dateStartEnd =  str(datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d"))
-    params = {
-        'selectedPeriod': {
-            'start': dateStartEnd,
-            'end': dateStartEnd
-        },
-        'skipDeletedNm': False,
-        'orderBy': {
-            'field': 'openCard',
-            'mode': 'desc'
-        },
-        'limit': 1000
-    }
-    for attempt in range(max_attempts):
-        response = requests.post(url=url, headers=HEADERS, json=params)
-        STATUS_CODE = response.status_code
-        if STATUS_CODE == 200:
-            products = response.json().get('data').get('products')
-            logger.debug(f'Данные из Воронки продаж за {date} получены')
-            break   
-        elif STATUS_CODE == 429:
-            if attempt == max_attempts - 1:
-                logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
-                return None
-            logger.info(f'{STATUS_CODE} | {response.text} | Ожидание {5*(attempt+1)}сек.')
-            time.sleep(5 * (attempt+1))
-        else:
-            logger.error(f'{STATUS_CODE} | {response.text}')
-            return None
-
-    detail_history = []
-    for product in products:
-        detail_history_product = {}
-        detail_history_product['nmId'] = product.get('product').get('nmId')
-        detail_history_product['title'] = product.get('product').get('title')
-        detail_history_product['vendorCode'] = product.get('product').get('vendorCode')
-        detail_history_product['openCount'] = product.get('statistic').get('selected').get('openCount')
-        detail_history_product['cartCount'] = product.get('statistic').get('selected').get('cartCount')
-        detail_history_product['orderCount - cancelCount'] = product.get('statistic').get('selected').get('orderCount') - product.get('statistic').get('selected').get('cancelCount')
-        detail_history_product['orderSum - cancelSum'] = product.get('statistic').get('selected').get('orderSum') - product.get('statistic').get('selected').get('cancelSum')
-        detail_history_product['buyoutCount'] = product.get('statistic').get('selected').get('buyoutCount')
-        detail_history_product['buyoutSum'] = product.get('statistic').get('selected').get('buyoutSum')
-        detail_history.append(detail_history_product)
-    
-    if detail_history:
-        logger.success(f'Данные из Воронки продаж за {date} обработаны!')
-        return detail_history
-    else:
-        logger.error(f'Возникла ошибка при обработке данных за {date}')
-        return None
-         
 ### ------------------------------------------------- ###
 
 def GET_REALIZATION_DETAIL_REPORT(TOKEN_NAME: str, date: str, max_attempts: int = 5) -> list:    
@@ -602,7 +513,7 @@ def PROCESS_REALIZATION_DETAIL_REPORT(report: list):
     
 ### ------------------------------------------------- ### 
 
-def GET_PAID_STORAGE(TOKEN_NAME: str, date: str, max_attempts: int = 5, DEF_WAIT: int = 5) -> list:
+def GET_PAID_STORAGE(TOKEN_NAME: str, date: str, max_attempts: int = 5, DEF_WAIT: int = 15) -> list:
     """
     Функция для получения отчета о платном хранении \n
     date в формате dd.mm.yyyy
@@ -725,7 +636,7 @@ def GET_COST_PRICE(file_path: str = 'required_files/Себестоимости.x
 
 ### ------------------------------------------------- ### 
 
-def GET_ADVERTS_LIST(TOKEN_NAME: str, max_attempts: int = 5, DEF_WAIT = 5) -> list:
+def GET_ADVERTS_LIST(TOKEN_NAME: str, max_attempts: int = 5, DEF_WAIT = 15) -> list:
     """
     Функция возвращает список созданных в кабинете РК
     """
@@ -741,7 +652,7 @@ def GET_ADVERTS_LIST(TOKEN_NAME: str, max_attempts: int = 5, DEF_WAIT = 5) -> li
         response = requests.get(url=url, headers=HEADERS)
         STATUS_CODE = response.status_code
         if STATUS_CODE == 429:
-            WAIT_TIME = 5 * (attempt + 1)
+            WAIT_TIME = DEF_WAIT * (attempt + 1)
             if attempt == (max_attempts - 1):
                 logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
                 return None
@@ -758,7 +669,7 @@ def GET_ADVERTS_LIST(TOKEN_NAME: str, max_attempts: int = 5, DEF_WAIT = 5) -> li
 
 ### ------------------------------------------------- ###
 
-def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_attempts: int = 5, DEF_WAIT = 5) -> list:
+def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_attempts: int = 5, DEF_WAIT = 15) -> list:
     """
     Функция возвращает статистику всех РК в кабинете
     """
@@ -785,7 +696,7 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
             response = requests.get(url=url, headers=HEADERS, params=params)
             STATUS_CODE = response.status_code
             if STATUS_CODE == 429:
-                WAIT_TIME = 5 * (attempt + 1)
+                WAIT_TIME = DEF_WAIT * (attempt + 1)
                 if attempt == (max_attempts - 1):
                     logger.error(f'{STATUS_CODE} | Превышен лимит запросов. Повторите попытку позже.')
                     return None
@@ -821,7 +732,7 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
                         nm_stats['clicks'] = nm.get('clicks')
                         nm_stats['orders'] = nm.get('orders')
                         nm_stats['views'] = nm.get('views')
-                        nm_stats['ordersSum'] = nm.get('sum_price')
+                        nm_stats['orderSum'] = nm.get('sum_price')
                         full_stats.append(nm_stats)
         full_stats_df = pd.DataFrame(full_stats, index=None)
         full_stats_df = full_stats_df.groupby('nmId').agg(
@@ -831,7 +742,7 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
             clicks = ('clicks', 'sum'),
             orders = ('orders', 'sum'),
             views = ('views', 'sum'),
-            sum_price = ('ordersSum', 'sum'),
+            sum_price = ('orderSum', 'sum'),
         ).reset_index()
         full_stats_df['orders'] = full_stats_df['orders'] - full_stats_df['canceled']
         full_stats_df = full_stats_df.drop(columns=['canceled'])
@@ -844,8 +755,7 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
 ### ------------------------------------------------- ### 
 
 # В days передается кол-во дней для обновления отчета (в день максимум 20 запросов, рекомендуется - не более 15 дней)        
-file_name = 'Ежедневная статистика.xlsx'
-days = 15
+days = 30
 # При помощи инструментов pandas собираем список дат 
 dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
-UPDATE_DAILY_DETAIL_HISTORY_REPORT_CSV(dates=dates, TOKEN_NAME='КОСТРИК', file_name=file_name)
+UPDATE_DAILY_DETAIL_HISTORY_REPORT(dates=dates, TOKEN_NAME='КОСТРИК')
