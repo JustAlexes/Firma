@@ -754,7 +754,7 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
             
 ### ------------------------------------------------- ### 
 
-# В days передается кол-во дней для обновления отчета (в день максимум 20 запросов, рекомендуется - не более 15 дней)        
+# В days передается кол-во дней для обновления отчета       
 days = 30
 # При помощи инструментов pandas собираем список дат 
 dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
