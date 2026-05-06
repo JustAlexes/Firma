@@ -621,7 +621,7 @@ def GET_COST_PRICE(file_path: str = 'required_files/Себестоимости.x
     """
     logger.info(f'Получение себестоимостей')
     try:
-        cost_price_df = pd.read_excel(file_path, index_col= None)
+        cost_price_df = pd.read_excel(file_path, index_col=None)
         cost_price_df = cost_price_df.rename(columns={
             'Код': 'vendorCode',
             'Наименование': 'title',
@@ -754,8 +754,8 @@ def GET_ADVERTS_STATISTIC(TOKEN_NAME: str, date: str, adverts: list = [], max_at
             
 ### ------------------------------------------------- ### 
 
-# В days передается кол-во дней для обновления отчета       
-days = 30
+# В days передается кол-во дней для обновления отчета (21 дня достаточно, чтобы собрать все обновленные данные)
+days = 21
 # При помощи инструментов pandas собираем список дат 
 dates = pd.date_range(end=pd.Timestamp.now()-relativedelta(days=1), periods=days, freq='D').strftime('%d.%m.%Y').tolist()
 UPDATE_DAILY_DETAIL_HISTORY_REPORT(dates=dates, TOKEN_NAME='КОСТРИК')
